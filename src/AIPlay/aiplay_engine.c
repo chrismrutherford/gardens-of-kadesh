@@ -84,7 +84,7 @@ static ShipType shipTypeFromName(const char *name)
     {
         if (strcasecmp(aiplayShipTypeNames[i], name) == 0)
         {
-            return (ShipType)((sdword)i - 1);   // table skips index -1
+            return (ShipType)(sdword)i;   // table[0] == ShipType 0 (AdvanceSupportFrigate)
         }
     }
     return ShipType_Uninitialized;
@@ -510,14 +510,20 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
     }
     case aiplayVerb_build:
     {
+        dbgMessagef("AIPLAY-BUILD: type=%s race=%d player=%d creator=%p",
+                    o->name, (int)universe.players[aiplay.boundPlayer].race,
+                    aiplay.boundPlayer, (void*)select.ShipPtr[0]);
         ShipType type = shipTypeFromName(o->name);
         if (type <= ShipType_Uninitialized)
         {
             return aiplayError_badRequest;
         }
-        // afford pre-check (FR-006): static build cost vs player RUs
+        // afford pre-check (FR-006): static info must be loaded in this mission
         ShipStaticInfo *si = GetShipStaticInfoSafe(type, universe.players[aiplay.boundPlayer].race);
-        if (si != NULL)
+        if (si == NULL || !bitTest(si->common.infoFlags, IF_InfoLoaded))
+        {
+            return aiplayError_badRequest;      // e.g. "not loaded properly - stubbing out"
+        }
         {
             sdword cost    = si->buildCost;
             sdword quantity = o->quantity > 1 ? o->quantity : 1;

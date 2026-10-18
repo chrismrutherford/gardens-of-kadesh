@@ -95,6 +95,17 @@ static aiplayError parseOrder(
         }
     }
 
+    // verb-specific name params (contract: order.formation "formation",
+    // order.build "type", order.research "tech")
+    if (aiplayJsonGet(doc, params, "formation") >= 0 ||
+        aiplayJsonGet(doc, params, "type") >= 0 ||
+        aiplayJsonGet(doc, params, "tech") >= 0)
+    {
+        const char *key = aiplayJsonGet(doc, params, "formation") >= 0 ? "formation"
+                        : (aiplayJsonGet(doc, params, "type") >= 0 ? "type" : "tech");
+        aiplayJsonGetString(doc, params, key, out->name, AIPLAY_MAX_NAME);
+        out->targetKind = aiplayTarget_name;
+    }
     if (aiplayJsonGet(doc, params, "dockWith") >= 0)
     {
         out->targetId   = (uint64_t)aiplayJsonGetInt64(doc, params, "dockWith");
