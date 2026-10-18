@@ -587,6 +587,7 @@ void aiplayHandleLine(const char *line, aiplayJsonBuf *out)
     {
         aiplaySetPaused(true);
         aiplayRespOpen(out, idRaw);
+        aiplayJsonBufAddStr(out, "{");
         aiplayJsonBool(out, "paused", true);
         aiplayJsonTrimComma(out);
         aiplayJsonBufAddStr(out, "}");     // close result object
@@ -597,6 +598,7 @@ void aiplayHandleLine(const char *line, aiplayJsonBuf *out)
     {
         aiplaySetPaused(false);
         aiplayRespOpen(out, idRaw);
+        aiplayJsonBufAddStr(out, "{");
         aiplayJsonBool(out, "paused", false);
         aiplayJsonTrimComma(out);
         aiplayJsonBufAddStr(out, "}");     // close result object

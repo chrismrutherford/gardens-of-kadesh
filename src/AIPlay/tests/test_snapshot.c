@@ -128,6 +128,10 @@ static void testPauseAndStep(void)
     aiplayJsonBufInit(&resp, out, sizeof(out));
 
     handleLine("{\"id\":1,\"method\":\"time.pause\"}", &resp);
+    {   // envelope validity
+        aiplayJsonDoc sanity;
+        CHECK(aiplayJsonParse(&sanity, resp.data));
+    }
     CHECK(contains(&resp, "\"paused\":true"));
     handleLine("{\"id\":2,\"method\":\"aiSession.status\"}", &resp);
     CHECK(contains(&resp, "\"paused\":true"));
