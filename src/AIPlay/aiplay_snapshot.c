@@ -137,11 +137,24 @@ static bool writeObjectEntry(const aiplayIdIterItem *item, void *ctxVoid)
     }
     aiplayJsonDouble(out, "health", health);
     aiplayJsonDouble(out, "healthMax", info.healthMax);
-    if (info.moving)
+    if (info.orderVerb != NULL)
     {
-        aiplayJsonBufAddStr(out, "\"order\":{\"verb\":\"move\",\"target\":");
-        writeVec(out, info.moveTo);
-        aiplayJsonBufAddStr(out, "},");
+        aiplayJsonBufAddStr(out, "\"order\":{");
+        aiplayJsonString(out, "verb", info.orderVerb);
+        if (info.orderTargetId != 0)
+        {
+            aiplayJsonInt(out, "targetId", (int64_t)info.orderTargetId);
+        }
+        else if (info.orderCoord[0] != 0.0f || info.orderCoord[1] != 0.0f ||
+                 info.orderCoord[2] != 0.0f)
+        {
+            aiplayJsonBufAddStr(out, "\"target\":");
+            writeVec(out, info.orderCoord);
+            aiplayJsonBufAdd(out, ",", 1);
+        }
+        aiplayJsonTrimComma(out);
+        aiplayJsonBufAddStr(out, "}");
+        aiplayJsonBufAdd(out, ",", 1);
     }
     else
     {

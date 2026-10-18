@@ -259,6 +259,8 @@ void aiplayOrdersProcessQueue(void)
         }
         else
         {
+            // drain-level rejection diagnostics via the backend sink (purity-safe)
+            aiplayTraceLog("AIPLAY-DRAIN-REJECT: order rejected at drain");
             aiplayEventPush(aiplayEvent_orderRejected, o.id, (uint64_t)err, aiplayBoundPlayer());
         }
     }

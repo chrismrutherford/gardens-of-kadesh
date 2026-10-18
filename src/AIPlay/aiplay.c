@@ -46,6 +46,14 @@ const aiplayEngineBackend *aiplayBackendGet(void)
     return backend;
 }
 
+void aiplayTraceLog(const char *line)
+{
+    if (backend != NULL && backend->traceLog != NULL)
+    {
+        backend->traceLog(line);
+    }
+}
+
 bool aiplaySessionReady(void)
 {
     return aiplay.enabled && backend != NULL;

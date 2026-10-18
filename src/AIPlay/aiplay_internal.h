@@ -29,6 +29,9 @@ bool aiplayIdEach(bool (*cb)(const aiplayIdIterItem *item, void *ctx), void *ctx
 bool aiplayIdIsResource(uint64_t id);
 const aiplayEngineBackend *aiplayBackendGet(void);
 
+// diagnostics via backend sink (no engine symbols leak into the core)
+void aiplayTraceLog(const char *line);
+
 // snapshot writing (aiplay_snapshot.c): params subset of request
 void aiplaySnapshotWrite(aiplayJsonBuf *out, const struct aiplayJsonDoc *doc, int32_t params);
 

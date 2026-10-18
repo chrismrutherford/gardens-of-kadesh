@@ -17,6 +17,7 @@
 #include "ObjTypes.h"
 #include "Options.h"
 #include "CommandDefs.h"
+#include "ShipSelect.h"
 #include "ResearchAPI.h"
 #include "Debug.h"
 #include "utility.h"    // utyLoadSinglePlayerGameGivenFilename
@@ -216,6 +217,85 @@ void aiplayEngineSyncShips(void)
     }
 }
 
+// per-ship current order from the command layer's CommandToDo list (T020)
+static void fillShipOrder(Ship *ship, aiplayShipInfo *out)
+{
+    out->orderVerb = NULL;
+    Node *node = universe.mainCommandLayer.todolist.head;
+    while (node != NULL)
+    {
+        CommandToDo *todo = (CommandToDo *)listGetStructOfNode(node);
+        node = node->next;
+        SelectCommand *sel = todo->selection;
+        bool mine = false;
+        if (sel != NULL && todo->ordertype.order != COMMAND_BUILDING_SHIP)
+        {
+            for (sdword i = 0; i < sel->numShips; i++)
+            {
+                if (sel->ShipPtr[i] == (ShipPtr)ship)
+                {
+                    mine = true;
+                    break;
+                }
+            }
+        }
+        if (!mine)
+        {
+            continue;
+        }
+        switch (todo->ordertype.order)
+        {
+        case COMMAND_MOVE:
+            out->orderVerb = "move";
+            out->orderCoord[0] = todo->move.destination.x;
+            out->orderCoord[1] = todo->move.destination.y;
+            out->orderCoord[2] = todo->move.destination.z;
+            break;
+        case COMMAND_ATTACK:
+            out->orderVerb = "attack";
+            if (todo->attack->numTargets > 0)
+            {
+                out->orderTargetId = (uint64_t)(uintptr_t)todo->attack->TargetPtr[0];
+            }
+            break;
+        case COMMAND_COLLECT_RESOURCES:
+            out->orderVerb = "harvest";
+            if (todo->collect.resource != NULL)
+            {   // CollectResourceCommand is a VALUE member carrying one ResourcePtr
+                out->orderTargetId = (uint64_t)(uintptr_t)todo->collect.resource;
+            }
+            break;
+        case COMMAND_DOCK:
+            out->orderVerb = "dock";
+            break;
+        case COMMAND_LAUNCH_SHIP:
+            out->orderVerb = "launch";
+            break;
+        case COMMAND_SPECIAL:
+            out->orderVerb = "special";
+            break;
+        case COMMAND_HALT:
+            out->orderVerb = "halt";
+            break;
+        case COMMAND_MILITARY_PARADE:
+            out->orderVerb = "parade";
+            break;
+        default:
+            out->orderVerb = "order?";
+            break;
+        }
+        if ((todo->ordertype.attributes & COMMAND_MASK_PASSIVE_ATTACKING) &&
+            out->orderVerb == NULL)
+        {
+            out->orderVerb = "passive-attack";
+        }
+        if (out->orderVerb != NULL)
+        {
+            return;    // first matching command wins (later ones are additive)
+        }
+    }
+}
+
 // backend shipInfo: fill from SpaceObj/Ship/Resource internals
 static bool backendShipInfo(void *opaque, aiplayShipInfo *out)
 {
@@ -242,9 +322,11 @@ static bool backendShipInfo(void *opaque, aiplayShipInfo *out)
         out->health     = ship->targetable.health;
         out->healthMax  = ship->staticinfo->health.maxhealth;
         out->moving     = (ship->obj.posinfo.isMoving & MOVING_LINEARLY_BIT) != 0;
-        out->moveTo[0]  = ship->moveTo.x;
-        out->moveTo[1]  = ship->moveTo.y;
-        out->moveTo[2]  = ship->moveTo.z;
+        fillShipOrder(ship, out);
+        if (out->orderVerb == NULL && out->moving)
+        {   // no command but physically moving (e.g. flight momentum)
+            out->orderVerb = "moving";
+        }
         return true;
     }
     if (obj->header.objtype == OBJ_AsteroidType)
@@ -530,6 +612,8 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         ShipStaticInfo *si = GetShipStaticInfoSafe(type, universe.players[aiplay.boundPlayer].race);
         if (si == NULL || !bitTest(si->common.infoFlags, IF_InfoLoaded))
         {
+            dbgMessagef("AIPLAY-REJECT: %s statics %s", o->name,
+                        si == NULL ? "NULL" : "not IF_InfoLoaded");
             return aiplayError_badRequest;      // e.g. "not loaded properly - stubbing out"
         }
         {
@@ -575,6 +659,11 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
 
 // --------------------------------------------------------------- backend table
 
+static void backendTraceLog(const char *line)
+{
+    dbgMessagef("%s", line);
+}
+
 static bool backendSaveGame(const char *name);
 
 static const aiplayEngineBackend engineBackend = {
@@ -595,6 +684,7 @@ static const aiplayEngineBackend engineBackend = {
     backendBuildQueueJSON,
     backendResearchJSON,
     backendSaveGame,      // defined below (GamePick.c plumbing)
+    backendTraceLog,
 };
 
 const aiplayEngineBackend *aiplayEngineBackendGet(void)

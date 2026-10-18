@@ -157,8 +157,12 @@ static bool sbShipInfo(void *opaque, aiplayShipInfo *out)
             out->typeName     = ships[i].type;
             memcpy(out->pos,    ships[i].pos,    sizeof(out->pos));
             memcpy(out->vel,    ships[i].vel,    sizeof(out->vel));
-            memcpy(out->moveTo, ships[i].moveTo, sizeof(out->moveTo));
+
             out->moving       = ships[i].moving;
+            out->orderVerb    = "move";     // stub: ships report their move order
+            out->orderCoord[0] = ships[i].moveTo[0];
+            out->orderCoord[1] = ships[i].moveTo[1];
+            out->orderCoord[2] = ships[i].moveTo[2];
             out->health       = ships[i].health;
             out->healthMax    = ships[i].healthMax;
             out->resourceValue = ships[i].resValue;
@@ -212,10 +216,16 @@ static double sbTimeElapsed(void)            { return stubElapsed; }
 static bool sbIsPaused(void)                 { return stubPaused; }
 static void sbSetNeutralized(int i, bool n)  { stubNeutralized = n ? i : -1; }
 
+static void stTraceLog(const char *line)
+{
+    printf("STUB-LOG: %s\n", line);
+}
+
 static const aiplayEngineBackend stubBackend = {
     sbNumPlayers, sbPlayerAlive, sbPlayerIsAI, sbResourceUnits, sbMapName,
     sbGameRunning, sbTick, sbTimeElapsed, sbIsPaused, sbSetNeutralized, sbDispatch,
     sbShipInfo, sbSetPaused, sbStep,
+    stTraceLog,
 };
 
 void testSyncShipsHook(void)

@@ -164,6 +164,8 @@ typedef struct aiplayEngineBackend
     void     (*researchJSON)(struct aiplayJsonBuf *out, int playerIndex);
     // save the current match to a named savegame (agent T040 convenience)
     bool     (*saveGame)(const char *name);
+    // diagnostics sink (engine: dbgMessagef; tests: stdout); may be NULL
+    void     (*traceLog)(const char *line);
 } aiplayEngineBackend;
 
 typedef struct aiplayShipInfo
@@ -174,8 +176,10 @@ typedef struct aiplayShipInfo
     const char *typeName; // engine-local name (e.g. "Interceptor", "Asteroid")
     float   pos[3];
     float   vel[3];
-    float   moveTo[3];    // destination while moving (best-effort current order)
-    bool    moving;
+    const char  *orderVerb;     // NULL = idle; else "move"/"attack"/"harvest"...
+    uint64_t     orderTargetId; // for attack/dock/harvest target refs
+    float        orderCoord[3]; // for move/attack coord destinations
+    bool         moving;
     float   health;
     float   healthMax;
     int32_t resourceValue;    // resources only
