@@ -13,6 +13,7 @@
 #include <SDL2/SDL.h>
 
 #include "AIPlayer.h"
+#include "../AIPlay/aiplay_engine_hooks.h"
 #include "AutoLOD.h"
 #include "avi.h"
 // #include "bink.h"
@@ -607,6 +608,7 @@ bool32 syncDumpInit(char *string1)
 #define entryComment(comment)               {COF_Visible, comment, NULL, NULL, 0, NULL}
 commandoption commandOptions[] =
 {
+    entryVr("/aiPlay",              aiplayRequested, TRUE,          " - Enable the AI play layer (local AI-play socket + spectating)."),
 #ifdef HW_BUILD_FOR_DEBUGGING
     entryComment("DEBUGGING OPTIONS"),//-----------------------------------------------------
     entryVr("/debug",               DebugWindow, TRUE,                  " - Enable debug window."),
@@ -2297,6 +2299,7 @@ int main (int argc, char* argv[])
             if (breakMainLoop) break;
 
             utyTasksDispatch(); // execute all tasks
+            aiplayFramePoll();  // AI play layer transport pump
 
             if (opTimerActive) {
                 if (taskTimeElapsed > (opTimerStart + opTimerLength)) {

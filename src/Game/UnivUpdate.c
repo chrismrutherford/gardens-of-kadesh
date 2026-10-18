@@ -6,6 +6,7 @@
     Copyright Relic Entertainment, Inc.  All rights reserved.
 =============================================================================*/
 
+#include "../AIPlay/aiplay_engine_hooks.h"
 #include "UnivUpdate.h"
 
 #include <math.h>
@@ -7270,6 +7271,8 @@ void univCheckRegrowResources(void)
 ----------------------------------------------------------------------------*/
 bool32 univUpdate(real32 phystimeelapsed)
 {
+    aiplayTickBegin();      // AI play layer: tick-boundary order drain (feature 002)
+
 #ifdef _WIN32
 #define TMP_SAVEDGAMES_PATH "SavedGames\\"
 #else
@@ -7587,6 +7590,10 @@ bool32 univUpdate(real32 phystimeelapsed)
         universe.bounties = TRUE;
         calculatePlayerBounties();
     }
+
+    aiplayEngineSyncShips();    // AI play layer: refresh ship id map (feature 002)
+    aiplayTickEnd();
+
     return FALSE;
 }
 

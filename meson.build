@@ -217,18 +217,18 @@ endif
 if host_machine.system() == 'emscripten'
 	executable(
 		meson.project_name(),
-		src,
+		src + [aiplay_engine_glue],
 		include_directories: inc_src,
-		link_with: [lib_sdl],
+		link_with: [lib_sdl, lib_aiplay],
 		c_args: c_args,
 		install: true,
 	)
 else
 	executable(
 		meson.project_name(),
-		src,
+		src + [aiplay_engine_glue],
 		include_directories: inc_src,
-		link_with: [lib_sdl],
+		link_with: [lib_sdl, lib_aiplay],
 		dependencies: base_deps,
 		c_args: c_args,
 		install: true,

@@ -4,6 +4,7 @@
     Created June 1997 by Luke Moloney
 =============================================================================*/
 
+#include "../AIPlay/aiplay_engine_hooks.h"
 #include "utility.h"
 
 #include <ctype.h>
@@ -4243,6 +4244,7 @@ DONE_INTROS:
         utySinglePlayerGameStart("", NULL);
     }
 
+    aiplayEngineInit();     // AI play layer: start transport if /aiPlay given
     return(NULL);                                           //success, return no error
 }
 
@@ -4307,6 +4309,8 @@ char* utyGameSystemsPreShutdown(void)
 ----------------------------------------------------------------------------*/
 char *utyGameSystemsShutdown(void)
 {
+    aiplayEngineShutdown();     // AI play layer: stop transport, unbind player
+
     // close the autorun lock file
     if(utyLockFilehandle != 0) fileClose(utyLockFilehandle);
 
