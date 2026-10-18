@@ -18,10 +18,6 @@
 #include "Options.h"
 #include "CommandDefs.h"
 #include "ShipSelect.h"
-#include "font.h"
-#include "FontReg.h"
-#include "Select.h"
-#include "Color.h"
 #include "ResearchAPI.h"
 #include "Debug.h"
 #include "utility.h"    // utyLoadSinglePlayerGameGivenFilename
@@ -203,79 +199,6 @@ static void backendSetPlayerNeutralized(int playerIndex, bool neutralized)
 }
 
 // --------------------------------------------------------- ship id sync (tick end)
-
-// on-screen spectating HUD: RUs, fleet counts, build queue, pause state
-void aiplayEngineDrawHUD(void)
-{
-    if (!aiplay.enabled || !aiplaySessionReady() || !aiplayMatchRunning())
-    {
-        return;
-    }
-    extern fonthandle selGroupFont0;         // declared in src/Game/Select.h
-    fonthandle fhsave = fontMakeCurrent(selGroupFont0);
-
-    // fleet census (both players)
-    sdword p0ships = 0, p1ships = 0;
-    sdword p0int = 0, p0col = 0, p1int = 0, p1col = 0;
-    Node *node = universe.ShipList.head;
-    while (node != NULL)
-    {
-        Ship *ship = (Ship *)listGetStructOfNode(node);
-        node = node->next;
-        if (ship->shiptype == LightInterceptor)
-        {
-            if (ship->playerowner->playerIndex == 0) { p0int++; p0ships++; }
-            else                                     { p1int++; p1ships++; }
-        }
-        else if (ship->shiptype == ResourceCollector)
-        {
-            if (ship->playerowner->playerIndex == 0) { p0col++; p0ships++; }
-            else                                     { p1col++; p1ships++; }
-        }
-        else if (ship->shiptype == Mothership)
-        {
-            if (ship->playerowner->playerIndex == 0) { p0ships++; }
-            else                                     { p1ships++; }
-        }
-    }
-    Player *p0 = &universe.players[0];
-    Player *p1 = &universe.players[1];
-
-    char line[256];
-    sprintf(line, "AIPLAY  tick %d   RU  P0 %d  P1 %d",
-            universe.univUpdateCounter, p0->resourceUnits, p1->resourceUnits);
-    fontPrint(0, fontHeight(" ")*9, colRGB(80, 220, 255), line);
-    sprintf(line, "ships   P0 %d  (Int %d  Col %d)      P1 %d  (Int %d  Col %d)",
-            p0ships, p0int, p0col, p1ships, p1int, p1col);
-    fontPrint(0, fontHeight(" ")*10, colRGB(80, 220, 255), line);
-
-    // build queue for player 0
-    Node *q = universe.mainCommandLayer.todolist.head;
-    bool have = false;
-    while (q != NULL)
-    {
-        CommandToDo *todo = (CommandToDo *)listGetStructOfNode(q);
-        q = q->next;
-        if (todo->ordertype.order == COMMAND_BUILDING_SHIP &&
-            todo->buildingship.playerIndex == 0)
-        {
-            sdword left = (sdword)todo->buildingship.frameAtWhichToCreate -
-                          (sdword)universe.univUpdateCounter;
-            if (left < 0) { left = 0; }
-            sprintf(line, "building %-24s %4d t %s",
-                    shipTypeName(todo->buildingship.shipType), left,
-                    universePause ? "*PAUSED*" : "");
-            fontPrint(0, fontHeight(" ")*11, colRGB(80, 220, 255), line);
-            have = true;
-            break;
-        }
-    }
-    if (universePause && !have)
-    {
-        fontPrint(0, fontHeight(" ")*11, colRGB(255, 80, 80), "*PAUSED*");
-    }
-    fontMakeCurrent(fhsave);
-}
 
 void aiplayEngineSyncShips(void)
 {

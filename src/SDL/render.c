@@ -6,7 +6,6 @@
     Copyright Relic Entertainment, Inc.  All rights reserved.
 =============================================================================*/
 
-#include "../AIPlay/aiplay_engine_hooks.h"
 #include "render.h"
 
 #include <float.h>
@@ -3439,8 +3438,6 @@ extern sdword channelsinuse;
 void rndDrawOnScreenDebugInfo(void)
 {
     sdword y = 0;
-
-    aiplayEngineDrawHUD();      // AI play spectating overlay (feature 002)
 
 #if DEBUG_VISIBLE_POLYS
     static color c;
