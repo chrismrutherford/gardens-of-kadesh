@@ -1979,6 +1979,7 @@ abortloading:
 
     gameIsRunning = TRUE;
     aiplayEngineRestart();   // AI play layer: transport must survive universe rebuilds
+    dbgMessagef("EXIT-PATH: gameStart completed (universe rebuilt)");
 
 }
 
@@ -3032,6 +3033,7 @@ void utyGameQuit(char *name, featom *atom)
     Outputs     : Calls utyCloseOK
     Return      : void
 ----------------------------------------------------------------------------*/
+static void _utyLogGameQuitToMain(void) { dbgMessagef("EXIT-PATH: utyGameQuitToMain"); }
 void utyGameQuitToMain(char *name, featom *atom)
 {
     bool32 networkgame = multiPlayerGame;
@@ -4311,6 +4313,7 @@ char* utyGameSystemsPreShutdown(void)
 ----------------------------------------------------------------------------*/
 char *utyGameSystemsShutdown(void)
 {
+    dbgMessagef("EXIT-PATH: utyGameSystemsShutdown entered");
     aiplayEngineShutdown();     // AI play layer: stop transport, unbind player
 
     // close the autorun lock file

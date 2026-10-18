@@ -998,6 +998,7 @@ void CommandProcess(int code)
 {
     SDL_Event e;
 
+    dbgMessagef("EXIT-PATH: CommandProcess code=%d", (int)code);   // which FE event asked to exit
     switch (code)
     {
         case CID_ExitError:
@@ -1926,6 +1927,7 @@ void HandleEvent(SDL_Event const* pEvent) {
     
     
         case SDL_QUIT:
+            dbgMessagef("EXIT-PATH: SDL_QUIT (mainActuallyQuit=%d)", mainActuallyQuit);
             if (mainActuallyQuit)
             {
                 SDL_Event e;
@@ -2284,6 +2286,7 @@ int main (int argc, char* argv[])
 #else
 
         bool32 breakMainLoop = FALSE;
+        dbgMessagef("EXIT-PATH: native main loop starting");
 
         while (TRUE) {
             // Give sound a break :)
@@ -2298,7 +2301,11 @@ int main (int argc, char* argv[])
                     break;
                 }
             }
-            if (breakMainLoop) break;
+            if (breakMainLoop)
+            {
+                dbgMessagef("EXIT-PATH: SDL_QUIT event in main loop");
+                break;
+            }
 
             utyTasksDispatch(); // execute all tasks
             aiplayFramePoll();  // AI play layer transport pump
