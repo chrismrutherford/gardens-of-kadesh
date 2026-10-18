@@ -59,3 +59,6 @@ windows/bin/*
 windows/build/*
 *.c.d
 *.c.o
+# disc asset extraction output
+output/
+tools/REWise/

@@ -67,7 +67,11 @@ udword aviPlayIntros = 0;
 AVFormatContext *pFormatCtx    = NULL;
 AVCodecContext  *pCodecCtx     = NULL;
 AVStream        *streamPointer = NULL;
+#if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(59, 0, 100)
 AVCodec const   *pCodec        = NULL;
+#else
+AVCodec         *pCodec        = NULL;
+#endif
 AVFrame         *pFrame        = NULL;
 AVDictionary    **opts         = NULL;
 AVCodecParameters *pCodecpar   = NULL;
