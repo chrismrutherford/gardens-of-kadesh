@@ -59,7 +59,13 @@ void aiplayEngineAutoLoad(void)
     {
         return;
     }
-    dbgAssertOrIgnore(aiplaySavePath[0] == 0);
+    static bool32 aiplayAutoLoadDone = FALSE;
+    if (aiplayAutoLoadDone)
+    {   // universe rebuilds (mission transitions) must NOT reload the savegame:
+        // they would pin us to the first mission forever
+        return;
+    }
+    aiplayAutoLoadDone = TRUE;
     strcpy(aiplaySavePath, aiplayAutoSaveIsMP ? "SavedGames\\MultiPlayer\\"
                                               : "SavedGames\\SinglePlayer\\");
     strcat(aiplaySavePath, aiplayAutoSaveName);
@@ -814,6 +820,7 @@ const aiplayEngineBackend *aiplayEngineBackendGet(void)
 }
 
 // called from utyGameSystemsInit (src/SDL/utility.c) once systems are up
+static bool32 aiplayAutoLoadDone = FALSE;
 extern bool32 enableAVI;    // src/SDL/main.c (movies/animatics master switch)
 extern bool32 nisEnabled;   // src/Game/NIS.c (scripted in-engine cinematics)
 
