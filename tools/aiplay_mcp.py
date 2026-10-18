@@ -168,7 +168,7 @@ def main():
     global SOCKET_PATH
     ap = argparse.ArgumentParser()
     ap.add_argument("--socket", default=SOCKET_PATH)
-    ap.add_argument("--port", type=int, default=8000)
+    ap.add_argument("--port", type=int, default=8302)
     args = ap.parse_args()
     SOCKET_PATH = args.socket
 

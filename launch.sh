@@ -4,7 +4,7 @@
 # Usage:
 #   ./launch.sh                      # main menu (AI-play socket ready)
 #   ./launch.sh "Savegame Name"      # auto-load a saved game (skips menus+cinematics)
-#   ./launch.sh --port 8000          # also start the MCP HTTP sidecar
+#   ./launch.sh --port 8302          # also start the MCP HTTP sidecar
 #
 # The AI-play layer serves /tmp/homeworld-aiplay.sock (local-only). With --port,
 # an MCP sidecar is started on http://127.0.0.1:<port>/mcp (17 tools).

@@ -131,10 +131,10 @@ This creates a local-only control socket (`/tmp/homeworld-aiplay.sock`, permissi
 `127.0.0.1` only (default port `8000`):
 
 ```sh
-python3 tools/aiplay_mcp.py --port 8000
+python3 tools/aiplay_mcp.py --port 8302
 ```
 
-Point any MCP client at `http://127.0.0.1:8000/mcp`. You will keep full normal use of
+Point any MCP client at `http://127.0.0.1:8302/mcp`. You will keep full normal use of
 the window — HUD, camera, everything renders as usual; the AI only issues orders to
 its own bound side. Useful extras:
 

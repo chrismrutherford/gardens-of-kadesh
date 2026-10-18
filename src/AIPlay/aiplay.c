@@ -189,6 +189,18 @@ bool aiplayIdEach(bool (*cb)(const aiplayIdIterItem *item, void *ctx), void *ctx
     return true;
 }
 
+bool aiplayIdIsResource(uint64_t id)
+{
+    for (int i = 0; i < AIPLAY_ID_MAP_CAP; i++)
+    {
+        if (idMap[i].used && idMap[i].id == id)
+        {
+            return idMap[i].isResource;
+        }
+    }
+    return false;
+}
+
 bool aiplayIdResolve(uint64_t id, void **ship, int32_t *owner)
 {
     if (id == 0)

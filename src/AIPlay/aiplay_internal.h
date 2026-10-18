@@ -26,6 +26,7 @@ bool aiplayIdResolve(uint64_t id, void **ship, int32_t *owner);
 void aiplayIdMapReset(void);
 uint64_t aiplayIdTouchEx(void *ship, int owner, bool isResource);
 bool aiplayIdEach(bool (*cb)(const aiplayIdIterItem *item, void *ctx), void *ctx);
+bool aiplayIdIsResource(uint64_t id);
 const aiplayEngineBackend *aiplayBackendGet(void);
 
 // snapshot writing (aiplay_snapshot.c): params subset of request

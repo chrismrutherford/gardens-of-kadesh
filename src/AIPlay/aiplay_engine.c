@@ -460,6 +460,12 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
     case aiplayVerb_dock:
     {
         ShipPtr dockWith = NULL;
+        if (o->targetKind == aiplayTarget_ship &&
+            (!aiplayIdResolve(o->targetId, (void **)&dockWith, NULL) ||
+             dockWith->shipsInsideMe == NULL))
+        {
+            return aiplayError_badRequest;   // target cannot dock anything
+        }
         if (o->targetKind == aiplayTarget_ship && !aiplayIdResolve(o->targetId, (void **)&dockWith, NULL))
         {
             return aiplayError_badId;
@@ -470,9 +476,11 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
     case aiplayVerb_harvest:
     {
         void *target = NULL;
-        if (o->targetKind != aiplayTarget_ship || !aiplayIdResolve(o->targetId, &target, NULL))
+        if (o->targetKind != aiplayTarget_ship ||
+            !aiplayIdResolve(o->targetId, &target, NULL) ||
+            !aiplayIdIsResource(o->targetId))
         {
-            return aiplayError_badId;
+            return aiplayError_badId;   // harvest targets must be resources
         }
         clWrapCollectResource(&universe.mainCommandLayer, &select, (ResourcePtr)target);
         return aiplayError_none;
