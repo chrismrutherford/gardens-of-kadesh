@@ -134,6 +134,9 @@ extern aiplaySession aiplay;
 // Pure core only talks to the engine through this vtable (stubs in unit tests).
 struct aiplayShipInfo;
 
+struct aiplayJsonBuf;
+typedef struct aiplayJsonBuf aiplayJsonBuf;
+
 typedef struct aiplayEngineBackend
 {
     // world / match introspection
@@ -156,6 +159,9 @@ typedef struct aiplayEngineBackend
     // time control (US4): pause/resume the simulation, step N ticks forward
     void     (*setPaused)(bool paused);
     bool     (*step)(int ticks);
+    // build queue + research serialization (FR-001 completeness)
+    void     (*buildQueueJSON)(struct aiplayJsonBuf *out, int playerIndex);
+    void     (*researchJSON)(struct aiplayJsonBuf *out, int playerIndex);
 } aiplayEngineBackend;
 
 typedef struct aiplayShipInfo
@@ -200,6 +206,7 @@ void     aiplayNotifyShipDestroyed(void *shipOpaque, int killerOwner);
 // (a growable buffer owned by the caller). Never calls the engine outside the
 // backend; stateful dispatch is queue-only.
 struct aiplayJsonBuf;
+typedef struct aiplayJsonBuf aiplayJsonBuf;
 void aiplayHandleLine(const char *line, struct aiplayJsonBuf *out);
 
 // JSON writer primitives (deterministic key order; used by snapshot/events)

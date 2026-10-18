@@ -16,6 +16,7 @@
 #include "SpaceObj.h"
 #include "ObjTypes.h"
 #include "Options.h"
+#include "CommandDefs.h"
 #include "ResearchAPI.h"
 #include "Debug.h"
 #include "utility.h"    // utyLoadSinglePlayerGameGivenFilename
@@ -28,15 +29,24 @@ bool32 aiplayRequested = FALSE;
 
 // set by /aiPlayLoad <savegame name> — auto-load the saved game at startup so
 // test rounds don't re-watch the intro (user convenience, feature 002)
-char aiplayAutoSaveName[128] = "";
+char aiplayAutoSaveName[128]  = "";
+bool32  aiplayAutoSaveIsMP    = FALSE;
 
 extern char SinglePlayerSavedGamesPath[];   // src/Game/GamePick.c
 
+// /aiPlayLoad <name>     -> single-player savegame
+// /aiPlayLoadMP <name>   -> multi-player savegame
 bool32 aiplayCmdlineSave(char *string)
 {
     strncpy(aiplayAutoSaveName, string, sizeof(aiplayAutoSaveName) - 1);
     aiplayAutoSaveName[sizeof(aiplayAutoSaveName) - 1] = '\0';
     return TRUE;
+}
+
+bool32 aiplayCmdlineSaveMP(char *string)
+{
+    aiplayAutoSaveIsMP = TRUE;
+    return aiplayCmdlineSave(string);
 }
 
 static char aiplaySavePath[512];    // must outlive gameStart's use
@@ -48,10 +58,19 @@ void aiplayEngineAutoLoad(void)
         return;
     }
     dbgAssertOrIgnore(aiplaySavePath[0] == 0);
-    strcpy(aiplaySavePath, "SavedGames\\SinglePlayer\\");
+    strcpy(aiplaySavePath, aiplayAutoSaveIsMP ? "SavedGames\\MultiPlayer\\"
+                                              : "SavedGames\\SinglePlayer\\");
     strcat(aiplaySavePath, aiplayAutoSaveName);
-    dbgMessagef("AI play: auto-loading savegame '%s'", aiplaySavePath);
-    utyLoadSinglePlayerGameGivenFilename(aiplaySavePath);
+    dbgMessagef("AI play: auto-loading %s savegame '%s'",
+                aiplayAutoSaveIsMP ? "multiplayer" : "singleplayer", aiplaySavePath);
+    if (aiplayAutoSaveIsMP)
+    {
+        utyLoadMultiPlayerGameGivenFilename(aiplaySavePath);
+    }
+    else
+    {
+        utyLoadSinglePlayerGameGivenFilename(aiplaySavePath);
+    }
 }
 
 // generated from Ships/ShipDefs.h ShipType_enum (skipping index -1)
@@ -260,6 +279,69 @@ static void backendSetPaused(bool paused)
         opPauseOrders = aiplayPrevOpPauseOrders;
         aiplayPrevOpPauseOrders = 0;
     }
+}
+
+static void backendBuildQueueJSON(aiplayJsonBuf *out, int playerIndex)
+{
+    // build queues live in the command layer as COMMAND_BUILDING_SHIP orders
+    Node *node = universe.mainCommandLayer.todolist.head;
+    bool first = true;
+    while (node != NULL)
+    {
+        CommandToDo *todo = (CommandToDo *)listGetStructOfNode(node);
+        node = node->next;
+        if (todo->ordertype.order != COMMAND_BUILDING_SHIP ||
+            todo->buildingship.playerIndex != (udword)playerIndex)
+        {
+            continue;
+        }
+        if (!first)
+        {
+            aiplayJsonBufAdd(out, ",", 1);
+        }
+        first = false;
+        aiplayJsonBufAdd(out, "{", 1);
+        aiplayJsonString(out, "type", shipTypeName(todo->buildingship.shipType));
+        sdword progressTicks = (sdword)todo->buildingship.frameAtWhichToCreate -
+                               (sdword)universe.univUpdateCounter;
+        if (progressTicks < 0)
+        {
+            progressTicks = 0;
+        }
+        aiplayJsonInt(out, "ticksRemaining", progressTicks);
+        aiplayJsonTrimComma(out);
+        aiplayJsonBufAdd(out, "}", 1);
+    }
+    aiplayJsonTrimComma(out);
+}
+
+static void backendResearchJSON(aiplayJsonBuf *out, int playerIndex)
+{
+    // array entries: {tech, labs, timeLeft} per research topic in progress
+    PlayerResearchInfo *ri = &universe.players[playerIndex].researchinfo;
+    if (!ri->CanDoResearch)
+    {
+        return;
+    }
+    bool first = true;
+    Node *node = ri->listoftopics.head;
+    while (node != NULL)
+    {
+        ResearchTopic *topic = (ResearchTopic *)listGetStructOfNode(node);
+        node = node->next;
+        if (!first)
+        {
+            aiplayJsonBufAdd(out, ",", 1);
+        }
+        first = false;
+        aiplayJsonBufAdd(out, "{", 1);
+        aiplayJsonString(out, "tech", TechTypeToString(topic->techresearch));
+        aiplayJsonInt(out, "labs", topic->numlabsresearching);
+        aiplayJsonDouble(out, "timeLeft", topic->timeleft);
+        aiplayJsonTrimComma(out);
+        aiplayJsonBufAdd(out, "}", 1);
+    }
+    aiplayJsonTrimComma(out);
 }
 
 static bool backendStep(int ticks)
@@ -494,6 +576,8 @@ static const aiplayEngineBackend engineBackend = {
     backendShipInfo,
     backendSetPaused,
     backendStep,
+    backendBuildQueueJSON,
+    backendResearchJSON,
 };
 
 const aiplayEngineBackend *aiplayEngineBackendGet(void)
@@ -502,9 +586,18 @@ const aiplayEngineBackend *aiplayEngineBackendGet(void)
 }
 
 // called from utyGameSystemsInit (src/SDL/utility.c) once systems are up
+extern bool32 enableAVI;    // src/SDL/main.c (movies/animatics master switch)
+extern bool32 nisEnabled;   // src/Game/NIS.c (scripted in-engine cinematics)
+
 void aiplayEngineInit(void)
 {
     aiplayInit(aiplayRequested != FALSE, NULL, aiplayEngineBackendGet());
+    if (aiplayRequested)
+    {
+        // spectating/debug mode: skip ALL cinematics (movies, animatics, NIS)
+        enableAVI  = FALSE;
+        nisEnabled = FALSE;
+    }
     aiplayEngineAutoLoad();     // /aiPlayLoad: straight into the saved game
 }
 

@@ -129,7 +129,13 @@ static bool writeObjectEntry(const aiplayIdIterItem *item, void *ctxVoid)
         aiplayJsonBufAdd(out, "}", 1);
         return true;
     }
-    aiplayJsonDouble(out, "health", info.health);
+    // ships pending removal can carry garbage health; treat as destroyed (0 hp)
+    float health = info.health;
+    if (health < 0.0f || health > info.healthMax * 2.0f)
+    {
+        health = 0.0f;
+    }
+    aiplayJsonDouble(out, "health", health);
     aiplayJsonDouble(out, "healthMax", info.healthMax);
     if (info.moving)
     {
@@ -183,13 +189,25 @@ void aiplaySnapshotWrite(aiplayJsonBuf *out, const aiplayJsonDoc *doc, int32_t p
     aiplayJsonBufAdd(out, "],", 2);
 
     ctx.wroteAny = false;
+    filter.wantShips = false;    // ships must not leak into the resources array
     aiplayJsonBufAddStr(out, "\"resources\":[");
     filter.wantResources = true;
     aiplayIdEach(writeObjectEntry, &ctx);
     aiplayJsonBufAdd(out, "],", 2);
 
-    aiplayJsonRaw(out, "buildQueue", "[]");
-    aiplayJsonRaw(out, "research", "[]");
+    aiplayJsonBufAddStr(out, "\"buildQueue\":[");
+    if (be != NULL && be->buildQueueJSON != NULL && aiplayBoundPlayer() >= 0)
+    {
+        be->buildQueueJSON(out, aiplayBoundPlayer());
+    }
+    aiplayJsonBufAdd(out, "],", 2);
+
+    aiplayJsonBufAddStr(out, "\"research\":[");
+    if (be != NULL && be->researchJSON != NULL && aiplayBoundPlayer() >= 0)
+    {
+        be->researchJSON(out, aiplayBoundPlayer());
+    }
+    aiplayJsonBufAdd(out, "],", 2);
 
     // match status: winner is known when the simulation has stopped
     bool running = be != NULL && be->gameRunning();

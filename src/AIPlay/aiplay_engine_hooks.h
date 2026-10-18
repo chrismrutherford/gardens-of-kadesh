@@ -11,7 +11,8 @@
 extern bool32 aiplayRequested;   // set by the /aiPlay command-line option
 
 void aiplayEngineInit(void);     // call once after utyGameSystemsInit succeeded
-bool32 aiplayCmdlineSave(char *string);  // /aiPlayLoad <name> handler (COF_NextToken)
+bool32 aiplayCmdlineSave(char *string);    // /aiPlayLoad <name> handler (COF_NextToken)
+bool32 aiplayCmdlineSaveMP(char *string);  // /aiPlayLoadMP <name> handler (COF_NextToken)
 void aiplayEngineShutdown(void); // call inside utyGameSystemsShutdown
 void aiplayEngineSyncShips(void);// call at the end of univUpdate, before aiplayTickEnd
 

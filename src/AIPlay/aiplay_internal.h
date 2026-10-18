@@ -7,6 +7,8 @@
 #include "aiplay.h"
 #include "aiplay_json.h"
 
+// aiplay.h forward declares the typedef so backend vtable entries resolve.
+
 // event log (implemented in aiplay.c, used by orders/snapshot)
 void aiplayEventPush(aiplayEventType type, uint64_t id, uint64_t aux, int32_t owner);
 void aiplayEventsWrite(aiplayJsonBuf *out);

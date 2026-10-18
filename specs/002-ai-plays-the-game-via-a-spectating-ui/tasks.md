@@ -247,3 +247,10 @@ continues with orders intact (spec acceptance 1–2, quickstart Scenario B).
   (T003, T007) and build wiring (T002) — keep it that way (constitution II).
 - `src/AIPlay/aiplay_orders.c` is the only place in the layer allowed to call `clWrap*`.
 - All snapshot JSON key names MUST match contracts/ai-play.md verbatim.
+## Phase 8: Convergence
+
+- [ ] T036 Serialize player build queue and research state into snapshot per FR-001 (aiplay_snapshot.c; buildQueue/research are currently literal []) per FR-001 (partial)
+- [ ] T037 Live-scripted verification of order_build, order_research, order_formation in a real match per FR-005 (partial)
+- [ ] T038 Live disconnect/reconnect test: kill client mid-match, game continues, rebind emits matchContinued and ids regenerate per FR-010 (partial)
+- [ ] T039 Explicit spectator-camera invariant test: move camera via UI, assert delta-zero in observed state beyond tick per FR-009, SC-004 (partial)
+- [ ] T040 Agent-driven full-skirmish spectating run: SC-001 start-to-victory, no crash, no second window per SC-001 (partial)
