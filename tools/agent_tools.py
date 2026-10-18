@@ -128,7 +128,7 @@ TOOLS = [
         "name": "save_game",
         "description": "Save the match to a named savegame (call when nagged)",
         "parameters": {"type": "object", "properties": {
-            "name": {"type": "string", "description": "savegame name, e.g. autosave-tickXXXX"}}}}},
+            "name": {"type": "string", "description": "savegame name (agent auto-names it: autosave-<epoch seconds>)"}}}}},
     {"type": "function", "function": {
         "name": "step",
         "description": "Advance N ticks while paused",

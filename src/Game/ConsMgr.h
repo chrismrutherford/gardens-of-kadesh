@@ -157,6 +157,16 @@ void cmDeterministicBuild(udword command, sdword numShips,
 void cmDeterministicBuildProcess(void);
 void cmDeterministicBuildDisplay(void);
 void cmDeterministicReset(void);
+// read-out of the deterministic build queue for one player
+void cmDetermBuildQueueIterate(
+    int playerIndex, void *userData,
+    void (*cb)(void *userData, ShipType shipType, ShipRace shipRace,
+               sdword numShips, sdword ticksLeft, sdword costPerShip));
+// deterministic batches (incl. AI-placed builds) for one factory/type:
+// returns FALSE if none pending
+bool32 cmDetermProgressForFactory(struct Ship *ship, ShipType shipType,
+                                  sdword *numShips, sdword *ticksLeft,
+                                  sdword *ticksForOne);
 // Not really a task anymore.
 void cmBuildTaskFunction(void);
 

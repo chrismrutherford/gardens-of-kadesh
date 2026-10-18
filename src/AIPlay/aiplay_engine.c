@@ -17,6 +17,7 @@
 #include "ObjTypes.h"
 #include "Options.h"
 #include "CommandDefs.h"
+#include "ConsMgr.h"
 #include "ShipSelect.h"
 #include "ResearchAPI.h"
 #include "Attributes.h"
@@ -328,6 +329,26 @@ static bool backendShipInfo(void *opaque, aiplayShipInfo *out)
         out->typeName   = shipTypeName(ship->shiptype);
         out->health     = ship->targetable.health;
         out->healthMax  = ship->staticinfo->health.maxhealth;
+        {
+            GunStaticInfo *gi = ship->staticinfo->gunStaticInfo;
+            if (gi != NULL)
+            {
+                out->numGuns = gi->numGuns;
+                for (sdword g = 0; g < gi->numGuns; g++)
+                {
+                    GunStatic *gs = &gi->gunstatics[g];
+                    real32 dmg = gs->gunDamageHi[Aggressive];
+                    if (dmg > 0.0f && gs->firetime > 0.0f)
+                    {
+                        out->dps += dmg / gs->firetime;
+                    }
+                    if (gs->bulletrange > out->range)
+                    {
+                        out->range = gs->bulletrange;
+                    }
+                }
+            }
+        }
         out->moving     = (ship->obj.posinfo.isMoving & MOVING_LINEARLY_BIT) != 0;
         fillShipOrder(ship, out);
         if (out->orderVerb == NULL && out->moving)
@@ -370,37 +391,37 @@ static void backendSetPaused(bool paused)
     }
 }
 
+// builds go through the deterministic-build funnel (ConsMgr cmDetermProgress),
+// the same queue the human UI displays
+typedef struct
+{
+    aiplayJsonBuf *out;
+    bool first;
+} bqJSONCtx;
+
+static void bqJSONCB(void *userData, ShipType shipType, ShipRace shipRace,
+                     sdword numShips, sdword ticksLeft, sdword costPerShip)
+{
+    bqJSONCtx *ctx = userData;
+    (void)shipRace;
+    (void)costPerShip;
+    if (!ctx->first)
+    {
+        aiplayJsonBufAdd(ctx->out, ",", 1);
+    }
+    ctx->first = false;
+    aiplayJsonBufAdd(ctx->out, "{", 1);
+    aiplayJsonString(ctx->out, "type", shipTypeName(shipType));
+    aiplayJsonInt(ctx->out, "quantity", numShips);
+    aiplayJsonInt(ctx->out, "ticksRemaining", ticksLeft > 0 ? ticksLeft : 0);
+    aiplayJsonTrimComma(ctx->out);
+    aiplayJsonBufAdd(ctx->out, "}", 1);
+}
+
 static void backendBuildQueueJSON(aiplayJsonBuf *out, int playerIndex)
 {
-    // build queues live in the command layer as COMMAND_BUILDING_SHIP orders
-    Node *node = universe.mainCommandLayer.todolist.head;
-    bool first = true;
-    while (node != NULL)
-    {
-        CommandToDo *todo = (CommandToDo *)listGetStructOfNode(node);
-        node = node->next;
-        if (todo->ordertype.order != COMMAND_BUILDING_SHIP ||
-            todo->buildingship.playerIndex != (udword)playerIndex)
-        {
-            continue;
-        }
-        if (!first)
-        {
-            aiplayJsonBufAdd(out, ",", 1);
-        }
-        first = false;
-        aiplayJsonBufAdd(out, "{", 1);
-        aiplayJsonString(out, "type", shipTypeName(todo->buildingship.shipType));
-        sdword progressTicks = (sdword)todo->buildingship.frameAtWhichToCreate -
-                               (sdword)universe.univUpdateCounter;
-        if (progressTicks < 0)
-        {
-            progressTicks = 0;
-        }
-        aiplayJsonInt(out, "ticksRemaining", progressTicks);
-        aiplayJsonTrimComma(out);
-        aiplayJsonBufAdd(out, "}", 1);
-    }
+    bqJSONCtx ctx = {out, true};
+    cmDetermBuildQueueIterate(playerIndex, &ctx, bqJSONCB);
     aiplayJsonTrimComma(out);
 }
 
@@ -490,11 +511,21 @@ static aiplayError buildSelection(const aiplayOrderRequest *o, aiplaySelectAny *
 
 static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
 {
+    // verbs that take no ship selection (contract: order.research takes only
+    // "tech", order.autolaunch only "onOff")
+    bool shipless = (o->verb == aiplayVerb_research || o->verb == aiplayVerb_autolaunch) ||
+                    (o->verb == aiplayVerb_build && o->numShips == 0);
+
     aiplaySelectAny sel;
-    aiplayError     err = buildSelection(o, &sel);
-    if (err != aiplayError_none)
+    memset(&sel, 0, sizeof(sel));
+    aiplayError err = aiplayError_none;
+    if (!shipless)
     {
-        return err;
+        err = buildSelection(o, &sel);
+        if (err != aiplayError_none)
+        {
+            return err;
+        }
     }
 
     // Local selection command for clWrap* (these wrappers send through the same
@@ -633,9 +664,12 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         }
         Player *p = &universe.players[aiplay.boundPlayer];
         ShipPtr builder = (o->numShips > 0) ? select.ShipPtr[0] : p->PlayerMothership;
-        clWrapBuildShip(
-            &universe.mainCommandLayer, type, p->race,
-            (uword)aiplay.boundPlayer, builder);
+        // same funnel the human build screen uses (clWrapDeterministicBuild):
+        // keeps the UI build queue (ConsMgr cmDetermProgress) in sync with
+        // AI-placed builds, and routes RUs through the shared drain code
+        clWrapDeterministicBuild(
+            CMD_START, &universe.mainCommandLayer, o->quantity,
+            type, p->race, (uword)aiplay.boundPlayer, builder);
         return aiplayError_none;
     }
     case aiplayVerb_research:
@@ -645,9 +679,15 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         {
             return aiplayError_badRequest;
         }
+        Player *rp = &universe.players[aiplay.boundPlayer];
+        sdword lab = rmFindFreeLab(rp);
+        if (rp->researchinfo.CanDoResearch == FALSE || lab == -1)
+        {
+            return aiplayError_noLabs;
+        }
         clWrapResearch(
             (udword)RESEARCH_SUBCOMMAND_START, (udword)aiplay.boundPlayer,
-            (udword)-1, (udword)tech);
+            (udword)lab, (udword)tech);
         return aiplayError_none;
     }
     case aiplayVerb_tactics:
@@ -772,7 +812,7 @@ static void backendTechTreeJSON(aiplayJsonBuf *out, int playerIndex)
                     aiplayJsonBufAdd(out, ",", 1);
                 }
                 mfirst = false;
-                aiplayJsonString(out, "", TechTypeToString(tech));
+                aiplayJsonBufPrintf(out, "\"%s\",", TechTypeToString(tech));
                 aiplayJsonTrimComma(out);
             }
         }

@@ -207,6 +207,10 @@ Research techs (exact names for order_research tech="..."):
 Research needs labs = ResearchShips in your fleet (techTree.labs in the
 snapshot). If techTree.labs == 0, NO research is possible — build a
 ResearchShip first. order_research without labs returns E_NO_LABS.
+Combat math: each ship reports health/healthMax, dps (gun damage/sec),
+guns, range — weigh attack plans as (sum own effective dps)/(enemy
+sum dps) and retreat when the ratio turns against you. Frigates/caps
+outrange corvettes: fight inside your range, outside theirs.
 If order_build is rejected with E_BAD_REQUEST, that hull's tech isn't
 researched yet — research it (needs labs).
 
@@ -284,8 +288,9 @@ def guard_call(name, args, snapshot):
     if "id" not in args or not isinstance(args["id"], (int, float)):
         args["id"] = int(time.time()) % 100000
     if name == "save_game":
-        # zero-padded tick: 12 digits so string sort == time sort
-        args["name"] = f"autosave-{snapshot.get('tick', 0):012d}"
+        # epoch timestamp: ticks aren't comparable across match restarts,
+        # and 13-digit epoch sorts naturally over days
+        args["name"] = f"autosave-{int(time.time())}"
     return args
 
 
@@ -348,13 +353,17 @@ def main():
     nags = [
         {"every": 600, "last": 0, "active": False, "trigger": "save_game", "msg":
          "SAVE NAG: it has been ~10 minutes since the last save. Call save_game "
-         "— the agent will name it (zero-padded tick) — just call it THIS round."},
+         "— the agent will name it (epoch timestamp) — just call it THIS round."},
         {"every": 300, "last": 0, "active": False, "trigger": None, "msg":
          "ECONOMY NAG: review RU income — make sure 2+ ResourceCollectors are "
          "harvesting and one more is queued if income is low."},
         {"every": 480, "last": 0, "active": False, "trigger": None, "msg":
-         "FLEET NAG: review the fleet — if you out-number the enemy 2:1, focus "
-         "attacks on ONE enemy ship; if losing, retreat fighters to guard the Mothership."},
+         "FLEET NAG: you must build a LARGE fleet before attacking — use the "
+         "research tree (research, then build) and pick a strategy deliberately: "
+         "early rush ONLY if massive surplus resources are available, otherwise "
+         "prefer expanding harvesting and building your fleet first, then attack. "
+         "If you out-number the enemy 2:1, focus attacks on ONE enemy ship; "
+         "if losing, retreat fighters to guard the Mothership."},
     ]
     last_save_action = None
 

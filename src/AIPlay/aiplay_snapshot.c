@@ -137,6 +137,9 @@ static bool writeObjectEntry(const aiplayIdIterItem *item, void *ctxVoid)
     }
     aiplayJsonDouble(out, "health", health);
     aiplayJsonDouble(out, "healthMax", info.healthMax);
+    aiplayJsonDouble(out, "dps", info.dps);
+    aiplayJsonInt(out, "guns", info.numGuns);
+    aiplayJsonDouble(out, "range", info.range);
     if (info.orderVerb != NULL)
     {
         aiplayJsonBufAddStr(out, "\"order\":{");

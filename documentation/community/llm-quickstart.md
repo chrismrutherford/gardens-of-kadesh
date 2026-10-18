@@ -46,8 +46,9 @@ What happens:
    observe → decide → order (move/attack/build/harvest/research/...) →
    result feedback → repeat.
 4. Autosaves every ~10 min to
-   `~/.homeworld/SavedGames/MultiPlayer/ai-autosave-*.` (zero-padded, time
-   sorted) and self-restarts from them after any outage.
+   `~/.homeworld/SavedGames/MultiPlayer/ai-autosave-*.` (epoch timestamp
+   named, string sort == time sort) and self-restarts from them after any
+   outage.
 
 The human spectates the normal game window (HUD + Caps Lock tactical overlay).
 
@@ -77,7 +78,7 @@ Useful agent flags:
 | "waiting for game socket" | game isn't running or still loading (~15 s); check `/tmp/aiplay-game-*.log` |
 | `E_NO_LABS (build ResearchShips first)` | fleet has no ResearchShip — the engine refuses research; the agent builds one |
 | `E_BAD_ID` on orders | after any match reset the agent re-observes and re-issues; a stray duplicate agent may be racing — `pgrep -af agent.py` |
-| Game window closed, match lost | relaunch from the latest autosave: `./launch.sh ai-autosave-0000000006165 --port 8302` |
+| Game window closed, match lost | relaunch from the latest autosave: `./launch.sh ai-autosave-1799999999999 --port 8302` |
 
 ## Safety
 

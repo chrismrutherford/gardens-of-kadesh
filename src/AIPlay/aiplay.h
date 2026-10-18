@@ -189,6 +189,9 @@ typedef struct aiplayShipInfo
     bool         moving;
     float   health;
     float   healthMax;
+    float   dps;              // aggressive-tactics gun damage/sec, 0 = unarmed
+    int32_t numGuns;
+    float   range;            // max gun bullet range (0 = unarmed)
     int32_t resourceValue;    // resources only
 } aiplayShipInfo;
 

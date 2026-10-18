@@ -1953,6 +1953,12 @@ void cmShipCostsDraw(featom *atom, regionhandle region)
             {                                                   //if working on this class
                 c = cmBuildingTextColor;
             }
+            else if (cmDetermProgressForFactory(factory->ship,
+                                                cmShipsAvailable[index].info->shiptype,
+                                                NULL, NULL, NULL))
+            {   //AI-placed deterministic batch: display as building
+                c = cmBuildingTextColor;
+            }
 
 #if CM_CHEAP_SHIPS
             if (cmCheapShips && !multiPlayerGame)
@@ -2977,6 +2983,32 @@ void cmShipInfoDraw(featom *atom, regionhandle region)
                     region->rect.x0 - CM_ProgressMarginLeft - CM_ProgressMarginRight) / 100;
                 primRectSolid2(&rect, cmProgressTotalColor);
             }
+            else
+            {   //AI-placed deterministic batch for this factory/type
+                sdword aiNum, aiTicks, aiFor;
+                if (cmDetermProgressForFactory(factory->ship,
+                                               cmShipsAvailable[index].info->shiptype,
+                                               &aiNum, &aiTicks, &aiFor) &&
+                    aiFor > 0)
+                {
+                    c = cmBuildingTextColor;
+
+                    percent = 100 - aiTicks * 100 / aiFor;
+                    rect.x0 = region->rect.x0 + 2 + cmSelectLeftAdjust;
+                    rect.y0 = y + CM_SelectBoxY0 + cmSelectTopAdjust;
+                    rect.y1 = y + fontHeight(" ") / 2 + cmSelectTopAdjust;
+                    rect.x1 = rect.x0 - 1 + cmSelectRightAdjust + percent * (region->rect.x1 -
+                        region->rect.x0 - CM_ProgressMarginLeft - CM_ProgressMarginRight) / 100;
+                    primRectSolid2(&rect, cmProgressShipColor);
+
+                    percent = 100 - (aiTicks + (aiNum - 1) * aiFor) * 100 / (aiFor * aiNum);
+                    rect.y0 = rect.y1;                           //draw bottom bar (progress of total job)
+                    rect.y1 = y + CM_SelectBoxY1 + cmSelectBottomAdjust - 1;
+                    rect.x1 = rect.x0 - 1 + cmSelectRightAdjust + percent * (region->rect.x1 -
+                        region->rect.x0 - CM_ProgressMarginLeft - CM_ProgressMarginRight) / 100;
+                    primRectSolid2(&rect, cmProgressTotalColor);
+                }
+            }
 
             if ((taskTimeElapsed-ExceededCapsFrames < FLASH_TIMER) && (ShipNumberExceeded==index))
             {
@@ -3136,6 +3168,29 @@ void cmTotalRUsDraw(featom *atom, regionhandle region)
                 RUs -= (sdword)RUsAlready;
             }
         }
+        else
+        {   //AI-placed deterministic batch: add its remaining cost
+            sdword aiNum, aiTicks, aiFor;
+            if (cmDetermProgressForFactory(factory->ship,
+                                           cmShipsAvailable[index].info->shiptype,
+                                           &aiNum, &aiTicks, &aiFor))
+            {
+                sdword aiCost = aiNum * cmShipsAvailable[index].info->buildCost;
+                if (aiFor <= 0 || aiTicks < 0)
+                {
+                    RUs += aiCost;
+                }
+                else
+                {
+                    aiTicks += (aiNum - 1) * aiFor;
+                    if (aiTicks > aiFor)
+                    {
+                        aiTicks = aiFor;
+                    }
+                    RUs += aiCost * aiTicks / aiFor;
+                }
+            }
+        }
     }
     width = fontWidthf("%d", RUs);                          //width of number
     feStaticRectangleDraw(region);                          //draw regular rectangle as backdrop
@@ -3182,6 +3237,15 @@ void cmTotalShipsDraw(featom *atom, regionhandle region)
             progress = &factory->progress[cmShipsAvailable[index].info->shiptype];
             nShips += cmShipsAvailable[index].nJobs;
             nShips += progress->nJobs;                          //active jobs, too
+            {   //AI-placed deterministic batches for this factory/type
+                sdword aiNum, aiTicks, aiFor;
+                if (cmDetermProgressForFactory(factory->ship,
+                                               cmShipsAvailable[index].info->shiptype,
+                                               &aiNum, &aiTicks, &aiFor))
+                {
+                    nShips += aiNum;
+                }
+            }
         }
     }
     width = fontWidthf("%d", nShips);                       //width of number
@@ -4343,9 +4407,52 @@ void cmDeterministicBuildProcess(void)
     }
 }
 
+// per-factory/type view of the deterministic batches (AI-placed builds pass
+// through clWrapDeterministicBuild too), so the build screen can display them
+bool32 cmDetermProgressForFactory(struct Ship *ship, ShipType shipType,
+                                  sdword *numShips, sdword *ticksLeft,
+                                  sdword *ticksForOne)
+{
+    Node* node = cmDetermProgress.head;
+    while (node != NULL)
+    {
+        cmDetermProgress_t* dprog = (cmDetermProgress_t*)listGetStructOfNode(node);
+        node = node->next;
+        if (dprog->creator == ship && dprog->shipType == shipType && dprog->numShips > 0)
+        {
+            if (numShips != NULL)    *numShips = dprog->numShips;
+            if (ticksLeft != NULL)   *ticksLeft = dprog->ticksLeft;
+            if (ticksForOne != NULL) *ticksForOne = dprog->ticksForOne;
+            return TRUE;
+        }
+    }
+    return FALSE;
+}
+
 /*=============================================================================
     Save Game Stuff:
 =============================================================================*/
+
+// deterministic build queue read-out for non-UI consumers (e.g. the AI-play
+// layer's snapshot): callbacks per pending batch for the given player
+void cmDetermBuildQueueIterate(
+    int playerIndex, void *userData,
+    void (*cb)(void *userData, ShipType shipType, ShipRace shipRace,
+               sdword numShips, sdword ticksLeft, sdword costPerShip))
+{
+    Node* node = cmDetermProgress.head;
+    while (node != NULL)
+    {
+        cmDetermProgress_t* dprog = (cmDetermProgress_t*)listGetStructOfNode(node);
+        node = node->next;
+        if (dprog->playerIndex != playerIndex || dprog->numShips <= 0)
+        {
+            continue;
+        }
+        cb(userData, dprog->shipType, dprog->shipRace,
+           dprog->numShips, dprog->ticksLeft, dprog->costPerShip);
+    }
+}
 
 #define RaceAndTypeToRaceType(race,type) ( ((race)<<16) + (type) )
 #define GetRaceFromRaceType(racetype) ( ((racetype)>>16) & 0x0000ffff )
