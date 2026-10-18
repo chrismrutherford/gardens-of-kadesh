@@ -64,6 +64,9 @@ if [[ -n "$SAVE" ]]; then
 fi
 
 echo "launch: HW_Data=$HW_DATA ${ARGS[*]}"
+GAMELOG="/tmp/aiplay-game-$(date +%H%M%S).log"
+rm -f /tmp/aiplay-game.log
+ln -s "$GAMELOG" /tmp/aiplay-game.log
 setsid nohup env HW_Data="$HW_DATA" "$BIN" "${ARGS[@]}" \
-    >/tmp/aiplay-game.log 2>&1 < /dev/null & disown
-echo "launched; game log /tmp/aiplay-game.log; socket /tmp/homeworld-aiplay.sock (~10s)"
+    >"$GAMELOG" 2>&1 < /dev/null & disown
+echo "launched; game log $GAMELOG (current: /tmp/aiplay-game.log); socket /tmp/homeworld-aiplay.sock (~10s)"

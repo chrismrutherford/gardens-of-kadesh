@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# watchdog.sh — relaunch the game whenever its AI socket disappears.
-# The agent (tools/agent.py) survives outages on its own and rebinds when the
-# socket reappears. The watchdog only ever starts the game; it never kills it.
+# watchdog.sh — relaunch the game when its AI socket disappears for >30s
+# (distinguishes "universe rebuild/load" from a real exit). Singleton via pidfile.
 #
 # Usage: tools/watchdog.sh [<savegame> ...]   (default: cmr1)
 set -u
@@ -15,21 +14,33 @@ trap 'rm -f "$PIDFILE"' EXIT
 
 SAVE="${1:-cmr1}"
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SOCK="/tmp/homeworld-aiplay.sock"
+DOWN_SINCE=0
 
-while true; do
-    if ! python3 - "ok" <<'PYEOF' 2>/dev/null
+socket_ok() {
+    python3 - <<'PYEOF' 2>/dev/null
 import socket, sys
 s = socket.socket(socket.AF_UNIX)
 try:
-    s.connect("/tmp/homeworld-aiplay.sock")
-    sys.exit(0)
+    s.connect("/tmp/homeworld-aiplay.sock"); sys.exit(0)
 except Exception:
     sys.exit(1)
 PYEOF
-    then
-        echo "$(date '+%H:%M:%S') watchdog: socket down — relaunching $SAVE"
-        (cd "$DIR" && ./launch.sh "$SAVE" >/tmp/aiplay-watchdog.log 2>&1) &
+}
+
+while true; do
+    if socket_ok; then
+        DOWN_SINCE=0
+    else
+        now="$(date +%s)"
+        if [[ $DOWN_SINCE -eq 0 ]]; then
+            DOWN_SINCE=$now
+        elif (( now - DOWN_SINCE >= 30 )); then
+            echo "$(date '+%H:%M:%S') watchdog: socket down >30s — relaunching $SAVE"
+            (cd "$DIR" && ./launch.sh "$SAVE" > /dev/null 2>&1) &
+            DOWN_SINCE=0
+            # give the game a full load window before polling again
+            sleep 45
+        fi
     fi
-    sleep 15
+    sleep 5
 done
