@@ -94,7 +94,7 @@ class LLM:
             "tools": TOOLS,
             "stream": True,
             "temperature": self.temperature,
-            "max_tokens": 900,
+            "max_tokens": 2600,
             "chat_template_kwargs": {"enable_thinking": True},
         }
         req = urllib.request.Request(
@@ -193,6 +193,19 @@ Strategy:
 """
 
 
+def order_detail(order):
+    """Full order detail incl. destination so the LLM can spot stuck ships."""
+    if not order:
+        return "idle"
+    verb = order.get("verb")
+    tgt = order.get("target")
+    if tgt is not None and isinstance(tgt, (list, tuple)):
+        if all(abs(v) < 1.0 for v in tgt):
+            return "STUCK-move-to-origin (re-order this ship!)"
+        return "%s -> [%d, %d, %d]" % (verb, tgt[0], tgt[1], tgt[2])
+    return str(verb)
+
+
 def compress_snapshot(snap):
     out = {
         "tick": snap.get("tick"),
@@ -205,7 +218,7 @@ def compress_snapshot(snap):
     out["ships"] = [{"id": s["id"], "owner": s["owner"], "type": s["type"],
                      "pos": [round(c) for c in s["pos"]],
                      "health": round(s["health"]),
-                     "order": (s.get("order") or {}).get("verb", "idle")}
+                     "order": order_detail(s.get("order"))}
                     for s in snap.get("ships", []) if s.get("health", 0) > 0][:80]
     out["resources"] = [{"id": r["id"], "value": r.get("value", 0),
                          "pos": [round(c) for c in r["pos"]]}
