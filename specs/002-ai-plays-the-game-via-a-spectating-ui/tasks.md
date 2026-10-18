@@ -215,7 +215,7 @@ continues with orders intact (spec acceptance 1–2, quickstart Scenario B).
 - [X] T034 [P] Update `documentation/community/installation-manual.md` with an
       "AI spectating mode" section (launch flag, MCP sidecar usage, localhost-only note)
       and the run instructions from quickstart.md
-- [ ] T035 Run full quickstart.md validation (Scenarios A–D) and record evidence in the
+- [X] T035 Run full quickstart.md validation (Scenarios A–D) and record evidence in the
       converge step; `meson test -C build` plus formatter/lint (`./.clang-format` via
       clang-format on `src/AIPlay/`)
 
