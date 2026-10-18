@@ -27,7 +27,7 @@ quickstart.md scenarios in converge.
 - [X] T003 [P] Add `--ai-play[=socketpath]` command-line parsing in `src/SDL/main.c`
       (default socket path `~/.homeworld/aiplay.sock`; default state disabled so vanilla
       behavior is untouched) and pass the flag to `aiplayInit`/`aiplayShutdown` hooks
-- [X] T004 [P] Write `tools/aiplay-rawtest.py` raw UDS test client skeleton
+- [X] T004 [P] Write `tools/aiplay_rawtest.py` raw UDS test client skeleton
       (send/receive JSON-RPC frames, print responses) for converge evidence
 
 ## Phase 2: Foundational (Blocking Prerequisites)
@@ -72,7 +72,7 @@ logic are unit-tested (`meson test -C build aiplay-tests` green).
 **Goal**: A visible, normal game session that an AI can drive while the human spectates.
 
 **Independent Test**: Start skirmish with `--ai-play`, connect via
-`tools/aiplay-rawtest.py`, send one `order.move`, watch the AI's ship travel on screen
+`tools/aiplay_rawtest.py`, send one `order.move`, watch the AI's ship travel on screen
 (spec acceptance 1) — plus disconnect mid-match without crash (acceptance 2).
 
 ### Tests for User Story 1 (constitution III)
@@ -85,13 +85,13 @@ logic are unit-tested (`meson test -C build aiplay-tests` green).
 
 ### Implementation for User Story 1
 
-- [ ] T013 [US1] Implement JSON serialization framework (compact, deterministic key order)
+- [X] T013 [US1] Implement JSON serialization framework (compact, deterministic key order)
       in `src/AIPlay/aiplay_snapshot.c` — reusable writer used by snapshot + events
       (unit test: deterministic byte output in `src/AIPlay/tests/test_snapshot.c`)
-- [ ] T014 [US1] Wire `aiSession.bind` / `aiSession.status` request handling end-to-end
+- [X] T014 [US1] Wire `aiSession.bind` / `aiSession.status` request handling end-to-end
       in `src/AIPlay/aiplay.c` + transport dispatch (mapName from engine, paused flag
       from `universePause`, tick from `universe.univUpdateCounter`)
-- [ ] T015 [US1] Implement disconnect/reconnect handling per FR-010: connection loss
+- [X] T015 [US1] Implement disconnect/reconnect handling per FR-010: connection loss
       never pauses or stops the sim; rebind re-attaches with regenerated ids and
       event `matchContinued`; handle mid-order-stream disconnect (queued orders still
       drain) — scripted verify per quickstart Scenario A step 3 and Scenario C step 3
@@ -113,25 +113,25 @@ match HUD values (spec acceptance 1–3).
 
 ### Tests for User Story 2 (constitution III)
 
-- [ ] T017 [P] [US2] Unit test snapshot section filters (`sections`, `owner` params)
+- [X] T017 [P] [US2] Unit test snapshot section filters (`sections`, `owner` params)
       in `src/AIPlay/tests/test_snapshot.c`
-- [ ] T018 [P] [US2] Unit test match-status computation (survivor/alliance + `gameIsRunning`,
+- [X] T018 [P] [US2] Unit test match-status computation (survivor/alliance + `gameIsRunning`,
       wintime path per research R-4) with stubbed universe in
       `src/AIPlay/tests/test_snapshot.c`
 
 ### Implementation for User Story 2
 
-- [ ] T019 [US2] Implement full `state.snapshot` builder in `src/AIPlay/aiplay_snapshot.c`
+- [X] T019 [US2] Implement full `state.snapshot` builder in `src/AIPlay/aiplay_snapshot.c`
       per data-model.md Snapshot table: ships (id, owner, type, race, pos, vel, health,
       healthMax, currentOrder verb/target), resources, players (RU, alive, lost, isAI),
       buildQueue, research, matchStatus, tick/timeElapsed/paused
-- [ ] T020 [US2] Implement current-order extraction from `mainCommandLayer` CommandToDo
+- [X] T020 [US2] Implement current-order extraction from `mainCommandLayer` CommandToDo
       entries for each ship (research R-6: order state lives in the command layer, not the
       Ship struct)
-- [ ] T021 [US2] Implement `state.events` with event types from contracts
+- [X] T021 [US2] Implement `state.events` with event types from contracts
       (`matchStarted`, `matchOver{winner,perPlayer}`, `shipDestroyed{id,owner,type,killer?}`),
       hooking ship death via layer-side detection (walk diff between ticks; no engine change)
-- [ ] T022 [US2] Implement paused-state snapshot stability guarantee: snapshot taken when
+- [X] T022 [US2] Implement paused-state snapshot stability guarantee: snapshot taken when
       `universePause==TRUE` reads within the tick-boundary slot; repeated call returns
       byte-identical JSON (verify scripted per quickstart Scenario B step 1)
 
@@ -149,28 +149,28 @@ snapshots; invalid order returns descriptive error with byte-identical re-snapsh
 
 ### Tests for User Story 3 (constitution III)
 
-- [ ] T023 [P] [US3] Unit test per-verb validation matrix (ship must belong to bound
+- [X] T023 [P] [US3] Unit test per-verb validation matrix (ship must belong to bound
       player; harvest requires collector; build requires build-capable vessel + RU
       affordability; unknown target ids → `E_BAD_ID`; dead player → `E_MATCH_OVER`)
       in `src/AIPlay/tests/test_orders.c`
-- [ ] T024 [P] [US3] Unit test order-queue overflow behaviour (`E_QUEUE_FULL` at ring
+- [X] T024 [P] [US3] Unit test order-queue overflow behaviour (`E_QUEUE_FULL` at ring
       capacity) and FIFO drain in `src/AIPlay/tests/test_orders.c`
 
 ### Implementation for User Story 3
 
-- [ ] T025 [US3] Implement `aiplay_orders.c` pre-validation + dispatch to the engine's
+- [X] T025 [US3] Implement `aiplay_orders.c` pre-validation + dispatch to the engine's
       `clWrap*` family (move/attack/guard/dock/harvest/special/halt/build/research/
       formation/select) using exactly the same entry points the human UI uses
       (research R-2 signature table); record `orderApplied{id}` / `orderRejected{id,reason}`
       in the event log — this file is the ONLY `clWrap*` caller in the layer
-- [ ] T026 [US3] Implement tick-boundary queue drain in the `aiplayTickBegin()` hook
+- [X] T026 [US3] Implement tick-boundary queue drain in the `aiplayTickBegin()` hook
       (`src/Game/UnivUpdate.c` site): drain happens before `aiplayerUpdateAll`, orders
       applied atomically within one deterministic tick (FR-002/FR-007); nothing runs
       mid-tick
-- [ ] T027 [US3] Implement afford/existence pre-checks against the bound player
+- [X] T027 [US3] Implement afford/existence pre-checks against the bound player
       (`resourceUnits` vs build cost from `ShipStaticInfo`, builder present from ship
       types) with engine-side fallback errors surfaced as `orderRejected` events
-- [ ] T028 [US3] Implement match-over gating (FR-013): `gameIsRunning == FALSE` ⇒
+- [X] T028 [US3] Implement match-over gating (FR-013): `gameIsRunning == FALSE` ⇒
       gameplay orders rejected with `E_MATCH_OVER`; observation methods keep working
 
 **Checkpoint**: US1+US2+US3 = complete observe→act loop; full quickstart Scenario C passes.
@@ -186,14 +186,14 @@ continues with orders intact (spec acceptance 1–2, quickstart Scenario B).
 
 ### Implementation for User Story 4
 
-- [ ] T029 [US4] Implement `time.pause` / `time.resume` / `time.step` by setting the
+- [X] T029 [US4] Implement `time.pause` / `time.resume` / `time.step` by setting the
       engine's own `universePause` flag (and forcing the allow-orders-while-paused
       allowance `opPauseOrders` for bound-player orders only, research R-3); PAUSE key/
       ESC menu interplay must stay functional for the human
-- [ ] T030 [US4] Implement `time.step N`: bounded N-tick advance from the paused state
+- [X] T030 [US4] Implement `time.step N`: bounded N-tick advance from the paused state
       via the task system (no threads, no turbo); unit test the step-count bookkeeping
       in `src/AIPlay/tests/test_session.c`
-- [ ] T031 [US4] Verify spectator-visible pause surface: HUD/menu pause indication shows
+- [X] T031 [US4] Verify spectator-visible pause surface: HUD/menu pause indication shows
       during AI pause (scripted check, quickstart Scenario B step 2); ensure orders
       submitted while paused queue and process on resume (quickstart Scenario B step 3)
 
@@ -203,14 +203,14 @@ continues with orders intact (spec acceptance 1–2, quickstart Scenario B).
 
 ## Phase 7: MCP HTTP sidecar + Polish
 
-- [ ] T032 Implement `tools/aiplay-mcp.py`: HTTP MCP server bound to **127.0.0.1 only**
+- [ ] T032 Implement `tools/aiplay_mcp.py`: HTTP MCP server bound to **127.0.0.1 only**
       (default port 8000, `--port`), standard MCP Streamable HTTP binding
       (`initialize`, `tools/list`, `tools/call`), relaying each tool call to the game's
       UDS endpoint per contracts/ai-play.md; tools: bind_session, game_status,
       observe, get_events, order_move, order_attack, order_guard, order_dock,
       order_harvest, order_special, order_halt, order_build, order_research,
       order_formation, pause, resume, step; `--http` is the default mode
-- [ ] T033 [P] Write `tools/aiplay-mcp.py` smoke tests (spin server, list tools, call
+- [ ] T033 [P] Write `tools/aiplay_mcp.py` smoke tests (spin server, list tools, call
       observe against a stub UDS server) as `tools/tests/test_aiplay_mcp.py`
 - [ ] T034 [P] Update `documentation/community/installation-manual.md` with an
       "AI spectating mode" section (launch flag, MCP sidecar usage, localhost-only note)

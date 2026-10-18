@@ -14,9 +14,59 @@
 #include "CommandWrap.h"
 #include "CommandNetwork.h"
 #include "SpaceObj.h"
+#include "ObjTypes.h"
+#include "Options.h"
+#include "ResearchAPI.h"
+#include "FormationDefs.h"
+#include "CommandLayer.h"
+#include <strings.h>
 
 // set by the /aiPlay command-line option (src/SDL/main.c)
 bool32 aiplayRequested = FALSE;
+
+// generated from Ships/ShipDefs.h ShipType_enum (skipping index -1)
+static const char *aiplayShipTypeNames[] = {
+#include "shiptype_names.inc"
+};
+
+static ShipType shipTypeFromName(const char *name)
+{
+    for (unsigned long i = 0; i < sizeof(aiplayShipTypeNames) / sizeof(aiplayShipTypeNames[0]); i++)
+    {
+        if (strcasecmp(aiplayShipTypeNames[i], name) == 0)
+        {
+            return (ShipType)((sdword)i - 1);   // table skips index -1
+        }
+    }
+    return ShipType_Uninitialized;
+}
+
+static TypeOfFormation formationFromName(const char *name)
+{
+    struct { const char *n; TypeOfFormation f; } table[] = {
+        {"delta", DELTA_FORMATION}, {"broad", BROAD_FORMATION},
+        {"delta3d", DELTA3D_FORMATION}, {"claw", CLAW_FORMATION},
+        {"wall", WALL_FORMATION}, {"sphere", SPHERE_FORMATION},
+    };
+    for (unsigned long i = 0; i < sizeof(table)/sizeof(table[0]); i++)
+    {
+        if (strcasecmp(table[i].n, name) == 0)
+        {
+            return table[i].f;
+        }
+    }
+    return (TypeOfFormation)-1;
+}
+
+static const char *shipTypeName(ShipType t)
+{
+    sdword i = (sdword)t;
+    if (i < 0 || (unsigned long)i >= sizeof(aiplayShipTypeNames) / sizeof(aiplayShipTypeNames[0]))
+    {
+        return "Unknown";
+    }
+    return aiplayShipTypeNames[i];
+}
 
 static bool32 neutralizeSaved[6];
 static bool32 neutralizeSavedUsed[6];
@@ -102,12 +152,101 @@ static void backendSetPlayerNeutralized(int playerIndex, bool neutralized)
 
 void aiplayEngineSyncShips(void)
 {
-    Ship *ship = (Ship *)universe.ShipList.head;
-    while (ship != NULL)
+    Node *node = universe.ShipList.head;
+    while (node != NULL)
     {
+        Ship *ship = (Ship *)listGetStructOfNode(node);
         aiplayIdTouch((void *)ship, (int)ship->playerowner->playerIndex);
-        ship = (Ship *)((Node *)ship->shiplink.next);
+        node = node->next;
     }
+    node = universe.ResourceList.head;
+    while (node != NULL)
+    {
+        aiplayIdTouchEx(listGetStructOfNode(node), -1, true);
+        node = node->next;
+    }
+}
+
+// backend shipInfo: fill from SpaceObj/Ship/Resource internals
+static bool backendShipInfo(void *opaque, aiplayShipInfo *out)
+{
+    SpaceObj *obj = (SpaceObj *)opaque;
+    memset(out, 0, sizeof(*out));
+    if (obj->header.objtype != OBJ_ShipType && obj->header.objtype != OBJ_AsteroidType)
+    {
+        return false;
+    }
+    out->ship = opaque;
+    out->pos[0] = obj->posinfo.position.x;
+    out->pos[1] = obj->posinfo.position.y;
+    out->pos[2] = obj->posinfo.position.z;
+    out->vel[0] = obj->posinfo.velocity.x;
+    out->vel[1] = obj->posinfo.velocity.y;
+    out->vel[2] = obj->posinfo.velocity.z;
+
+    if (obj->header.objtype == OBJ_ShipType)
+    {
+        Ship *ship = (Ship *)opaque;
+        out->owner      = (int)ship->playerowner->playerIndex;
+        out->isResource = false;
+        out->typeName   = shipTypeName(ship->shiptype);
+        out->health     = ship->targetable.health;
+        out->healthMax  = ship->staticinfo->health.maxhealth;
+        out->moving     = (ship->obj.posinfo.isMoving & MOVING_LINEARLY_BIT) != 0;
+        out->moveTo[0]  = ship->moveTo.x;
+        out->moveTo[1]  = ship->moveTo.y;
+        out->moveTo[2]  = ship->moveTo.z;
+        return true;
+    }
+    if (obj->header.objtype == OBJ_AsteroidType)
+    {
+        Resource *res = (Resource *)opaque;
+        out->owner      = -1;
+        out->isResource = true;
+        out->typeName   = "Asteroid";
+        out->health     = res->targetable.health;
+        out->healthMax  = res->staticinfo->_health.maxhealth;
+        out->resourceValue = res->resourcevalue;
+        return true;
+    }
+    return false;
+}
+
+// ---- time control (US4): the engine's own pause + the opPauseOrders seam ----
+
+static bool32 aiplayPrevOpPauseOrders = 0;
+
+static void backendSetPaused(bool paused)
+{
+    if (paused)
+    {
+        aiplayPrevOpPauseOrders = (bool32)opPauseOrders;
+        opPauseOrders  = TRUE;     // AI orders queue while paused (research R-3)
+        universePause  = TRUE;
+    }
+    else
+    {
+        universePause = FALSE;
+        opPauseOrders = aiplayPrevOpPauseOrders;
+        aiplayPrevOpPauseOrders = 0;
+    }
+}
+
+static bool backendStep(int ticks)
+{
+    if (universePause == FALSE)
+    {
+        return false;
+    }
+    for (int i = 0; i < ticks; i++)
+    {
+        // temporary step: run one manual update; the universe task itself is
+        // paused, so no double-ticking (research R-1)
+        universePause = FALSE;
+        (void)univUpdate(UNIVERSE_UPDATE_PERIOD);
+        universePause = TRUE;
+    }
+    return true;
 }
 
 // --------------------------------------------------------------- order dispatch
@@ -167,7 +306,7 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         select.ShipPtr[i] = sel.targets[i];
     }
 
-    switch (o->verb)
+    switch ((int)o->verb)
     {
     case aiplayVerb_move:
     {
@@ -257,10 +396,55 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         // selection is layer-side state; the human's selSelected must not change
         return aiplayError_none;
     }
-    default:
-        // build/research/formation land in user story 3 (T025)
-        return aiplayError_badRequest;
+    case aiplayVerb_build:
+    {
+        ShipType type = shipTypeFromName(o->name);
+        if (type <= ShipType_Uninitialized)
+        {
+            return aiplayError_badRequest;
+        }
+        // afford pre-check (FR-006): static build cost vs player RUs
+        ShipStaticInfo *si = GetShipStaticInfoSafe(type, universe.players[aiplay.boundPlayer].race);
+        if (si != NULL)
+        {
+            sdword cost    = si->buildCost;
+            sdword quantity = o->quantity > 1 ? o->quantity : 1;
+            if (universe.players[aiplay.boundPlayer].resourceUnits < (sdword)(cost * quantity))
+            {
+                return aiplayError_unaffordable;
+            }
+        }
+        Player *p = &universe.players[aiplay.boundPlayer];
+        ShipPtr builder = (o->numShips > 0) ? select.ShipPtr[0] : p->PlayerMothership;
+        clWrapBuildShip(
+            &universe.mainCommandLayer, type, p->race,
+            (uword)aiplay.boundPlayer, builder);
+        return aiplayError_none;
     }
+    case aiplayVerb_research:
+    {
+        TechnologyType tech = StrToTechType((char *)o->name);
+        if (tech < 0)
+        {
+            return aiplayError_badRequest;
+        }
+        clWrapResearch(
+            (udword)RESEARCH_SUBCOMMAND_START, (udword)aiplay.boundPlayer,
+            (udword)-1, (udword)tech);
+        return aiplayError_none;
+    }
+    case aiplayVerb_formation:
+    {
+        TypeOfFormation f = formationFromName(o->name);
+        if (f == (TypeOfFormation)-1)
+        {
+            return aiplayError_badRequest;
+        }
+        clWrapFormation(&universe.mainCommandLayer, &select, f);
+        return aiplayError_none;
+    }
+    }
+    return aiplayError_badRequest;
 }
 
 // --------------------------------------------------------------- backend table
@@ -277,7 +461,9 @@ static const aiplayEngineBackend engineBackend = {
     backendIsPaused,
     backendSetPlayerNeutralized,
     backendDispatchOrder,
-    NULL,  // shipInfo: filled in US2
+    backendShipInfo,
+    backendSetPaused,
+    backendStep,
 };
 
 const aiplayEngineBackend *aiplayEngineBackendGet(void)

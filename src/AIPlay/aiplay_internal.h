@@ -11,9 +11,28 @@
 void aiplayEventPush(aiplayEventType type, uint64_t id, uint64_t aux, int32_t owner);
 void aiplayEventsWrite(aiplayJsonBuf *out);
 
+typedef struct
+{
+    void   *ship;
+    uint64_t id;
+    int32_t  owner;
+    bool     isResource;
+} aiplayIdIterItem;
+
 // id map (aiplay.c)
 bool aiplayIdResolve(uint64_t id, void **ship, int32_t *owner);
 void aiplayIdMapReset(void);
+uint64_t aiplayIdTouchEx(void *ship, int owner, bool isResource);
+bool aiplayIdEach(bool (*cb)(const aiplayIdIterItem *item, void *ctx), void *ctx);
+const aiplayEngineBackend *aiplayBackendGet(void);
+
+// snapshot writing (aiplay_snapshot.c): params subset of request
+void aiplaySnapshotWrite(aiplayJsonBuf *out, const struct aiplayJsonDoc *doc, int32_t params);
+
+// session extras (aiplay.c)
+bool aiplayIsPaused(void);
+void aiplaySetPaused(bool paused);      // sets engine pause + order allowance
+bool aiplayStep(int ticks);             // step N ticks while paused
 
 // session helpers (aiplay.c)
 bool aiplaySessionReady(void);           // enabled && backend set

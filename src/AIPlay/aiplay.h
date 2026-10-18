@@ -151,17 +151,26 @@ typedef struct aiplayEngineBackend
     void     (*setPlayerNeutralized)(int playerIndex, bool neutralized);
     // orders: apply the request through the engine's own command funnel
     aiplayError (*dispatchOrder)(const aiplayOrderRequest *order);
-    // optional ship introspection (snapshot building; US2)
+    // ship/resource introspection (snapshot building; US2)
     bool     (*shipInfo)(void *shipOpaque, struct aiplayShipInfo *out);
+    // time control (US4): pause/resume the simulation, step N ticks forward
+    void     (*setPaused)(bool paused);
+    bool     (*step)(int ticks);
 } aiplayEngineBackend;
 
 typedef struct aiplayShipInfo
 {
-    void  *ship;      // engine handle (opaque to the core)
+    void  *ship;          // engine handle (opaque to the core)
     int32_t owner;
+    bool    isResource;   // true: object is a harvestable, not a ship
+    const char *typeName; // engine-local name (e.g. "Interceptor", "Asteroid")
     float   pos[3];
+    float   vel[3];
+    float   moveTo[3];    // destination while moving (best-effort current order)
+    bool    moving;
     float   health;
     float   healthMax;
+    int32_t resourceValue;    // resources only
 } aiplayShipInfo;
 
 // ------------------------------------------------------------------ lifecycle

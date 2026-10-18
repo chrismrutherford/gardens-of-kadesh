@@ -68,7 +68,7 @@ src/AIPlay/                     # NEW: the in-engine AI-play layer (compiled int
 ├── aiplay_snapshot.c           #   snapshot builder (walks ShipList/ResourceList/players)
 ├── aiplay_transport.c          #   non-blocking UDS listener; JSON framing
 └── tests/                      #   unit tests (meson test target `aiplay-tests`)
-tools/aiplay-mcp.py             # NEW: HTTP MCP sidecar (binds 127.0.0.1, Streamable HTTP MCP
+tools/aiplay_mcp.py             # NEW: HTTP MCP sidecar (binds 127.0.0.1, Streamable HTTP MCP
                                 #   binding; relays tool calls to the game over local UDS)
 src/SDL/main.c                  # MODIFIED: +2 lines — init/shutdown + per-frame poll hook
 src/Game/UnivUpdate.c           # MODIFIED: +1 line — tick-boundary drain hook before aiplayerUpdateAll

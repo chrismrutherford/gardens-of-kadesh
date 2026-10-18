@@ -61,6 +61,36 @@ bool aiplayMatchRunning(void)
     return backend != NULL && backend->gameRunning();
 }
 
+bool aiplayIsPaused(void)
+{
+    return backend != NULL && backend->isPaused();
+}
+
+void aiplaySetPaused(bool paused)
+{
+    if (backend == NULL)
+    {
+        return;
+    }
+    backend->setPaused(paused);
+}
+
+bool aiplayStep(int ticks)
+{
+    if (backend == NULL || !aiplayIsPaused())
+    {
+        return false;   // stepping only from a paused state (FR-011)
+    }
+    for (int i = 0; i < ticks; i++)
+    {
+        if (!backend->step(1))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 // ------------------------------------------------------------- id map
 
 typedef struct aiplayIdEntry
@@ -68,6 +98,7 @@ typedef struct aiplayIdEntry
     void   *ship;
     uint64_t id;
     int32_t  owner;
+    bool     isResource;
     bool     seen;
     bool     used;
 } aiplayIdEntry;
@@ -96,7 +127,7 @@ static aiplayIdEntry *idFindByShip(void *ship)
     return NULL;
 }
 
-uint64_t aiplayIdTouch(void *ship, int owner)
+uint64_t aiplayIdTouchEx(void *ship, int owner, bool isResource)
 {
     aiplayIdEntry *e = idFindByShip(ship);
     if (e == NULL)
@@ -105,11 +136,12 @@ uint64_t aiplayIdTouch(void *ship, int owner)
         {
             if (!idMap[i].used)
             {
-                e        = &idMap[i];
-                e->used  = true;
-                e->ship  = ship;
-                e->id    = aiplay.nextShipId++;
-                e->owner = owner;
+                e             = &idMap[i];
+                e->used       = true;
+                e->ship       = ship;
+                e->id         = aiplay.nextShipId++;
+                e->owner      = owner;
+                e->isResource = isResource;
                 break;
             }
         }
@@ -118,9 +150,43 @@ uint64_t aiplayIdTouch(void *ship, int owner)
             return 0;  // map exhausted
         }
     }
-    e->seen  = true;
-    e->owner = owner;
+    e->seen       = true;
+    e->owner      = owner;
+    e->isResource = isResource;
     return e->id;
+}
+
+uint64_t aiplayIdTouch(void *ship, int owner)
+{
+    return aiplayIdTouchEx(ship, owner, false);
+}
+
+static bool idEntryIsResource(void *ship)
+{
+    aiplayIdEntry *e = idFindByShip(ship);
+    return e != NULL && e->isResource;
+}
+
+bool aiplayIdEach(bool (*cb)(const aiplayIdIterItem *item, void *ctx), void *ctx)
+{
+    for (int i = 0; i < AIPLAY_ID_MAP_CAP; i++)
+    {
+        if (!idMap[i].used)
+        {
+            continue;
+        }
+        aiplayIdIterItem item = {
+            .ship       = idMap[i].ship,
+            .id         = idMap[i].id,
+            .owner      = idMap[i].owner,
+            .isResource = idMap[i].isResource,
+        };
+        if (!cb(&item, ctx))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 bool aiplayIdResolve(uint64_t id, void **ship, int32_t *owner)
@@ -153,6 +219,10 @@ void aiplayIdEvictUnseen(void)
     {
         if (idMap[i].used && !idMap[i].seen)
         {
+            if (!idMap[i].isResource)   // ship deaths are reported (FR-003)
+            {
+                aiplayEventPush(aiplayEvent_shipDestroyed, idMap[i].id, 0, idMap[i].owner);
+            }
             idMap[i].used = false;
             idMap[i].ship = NULL;
         }
@@ -321,48 +391,6 @@ static aiplayError bindPlayer(int32_t playerIndex)
 
 // --------------------------------------------------------------- snapshots
 
-static void writeSnapshot(aiplayJsonBuf *out)
-{
-    aiplayJsonBufAdd(out, "{", 1);
-    aiplayJsonInt(out, "tick", (int64_t)aiplay.lastTick);
-    aiplayJsonDouble(out, "timeElapsed", backend != NULL ? backend->timeElapsed() : 0.0);
-    aiplayJsonBool(out, "paused", backend != NULL && backend->isPaused());
-
-    aiplayJsonBufAdd(out, "\"players\":[", 11);
-    int nPlayers = backend != NULL ? backend->numPlayers() : 0;
-    for (int i = 0; i < nPlayers; i++)
-    {
-        if (i > 0)
-        {
-            aiplayJsonBufAdd(out, ",", 1);
-        }
-        aiplayJsonBufAdd(out, "{", 1);
-        aiplayJsonInt(out, "index", i);
-        aiplayJsonBool(out, "isAI", backend->playerIsAI(i));
-        aiplayJsonInt(out, "resourceUnits", backend->playerResourceUnits(i));
-        aiplayJsonBool(out, "alive", backend->playerAlive(i));
-        aiplayJsonBool(out, "lost", !backend->playerAlive(i));   // refined in US2
-        aiplayJsonTrimComma(out);
-        aiplayJsonBufAdd(out, "}", 1);
-    }
-    aiplayJsonBufAdd(out, "],", 2);
-
-    aiplayJsonRaw(out, "ships", "[]");
-    aiplayJsonRaw(out, "resources", "[]");
-    aiplayJsonRaw(out, "buildQueue", "[]");
-    aiplayJsonRaw(out, "research", "[]");
-
-    bool running = backend != NULL && backend->gameRunning();
-    aiplayJsonBufAddStr(out, "\"matchStatus\":{");
-    aiplayJsonBool(out, "running", running);
-    aiplayJsonNull(out, "winner");
-    aiplayJsonRaw(out, "perPlayer", "[]");
-    aiplayJsonTrimComma(out);
-    aiplayJsonBufAdd(out, "}", 1);
-    aiplayJsonTrimComma(out);
-    aiplayJsonBufAdd(out, "}", 1);
-}
-
 static void writeStatus(aiplayJsonBuf *out)
 {
     static const char *stateNames[] = {"disabled", "lobby", "playing", "matchOver"};
@@ -426,7 +454,22 @@ void aiplayTickBegin(void)
     else if (aiplay.state == aiplaySession_playing || aiplay.state == aiplaySession_lobby)
     {
         aiplay.state = aiplaySession_matchOver;
-        aiplayEventPush(aiplayEvent_matchOver, 0, 0, aiplay.boundPlayer);
+        // winner = the only surviving side (single winner per skirmish; ties null)
+        int  winner = -1;
+        bool anyAlive = false, multi = false;
+        for (int i = 0; i < backend->numPlayers(); i++)
+        {
+            if (backend->playerAlive(i))
+            {
+                if (anyAlive)
+                {
+                    multi = true;
+                }
+                anyAlive = true;
+                winner   = i;
+            }
+        }
+        aiplayEventPush(aiplayEvent_matchOver, 0, (uint64_t)(anyAlive && !multi ? winner + 1 : 0), aiplay.boundPlayer);
     }
     aiplay.lastTick = backend->tick();
     marksClear();                     // ship id sync starts (glue touches at tick end)
@@ -521,7 +564,7 @@ void aiplayHandleLine(const char *line, aiplayJsonBuf *out)
     if (strcmp(method, "state.snapshot") == 0)
     {
         aiplayRespOpen(out, idRaw);
-        writeSnapshot(out);
+        aiplaySnapshotWrite(out, &doc, params);
         aiplayRespClose(out);
         return;
     }
@@ -538,10 +581,39 @@ void aiplayHandleLine(const char *line, aiplayJsonBuf *out)
         aiplayOrderSubmitJson(&doc, params, method + 6, idRaw, out);
         return;
     }
-    if (strcmp(method, "time.pause") == 0 || strcmp(method, "time.resume") == 0 ||
-        strcmp(method, "time.step") == 0)
+    if (strcmp(method, "time.pause") == 0)
     {
-        aiplayRespError(out, idRaw, "E_BAD_REQUEST", "time control lands with user story 4");
+        aiplaySetPaused(true);
+        aiplayRespOpen(out, idRaw);
+        aiplayJsonBool(out, "paused", true);
+        aiplayRespClose(out);
+        return;
+    }
+    if (strcmp(method, "time.resume") == 0)
+    {
+        aiplaySetPaused(false);
+        aiplayRespOpen(out, idRaw);
+        aiplayJsonBool(out, "paused", false);
+        aiplayRespClose(out);
+        return;
+    }
+    if (strcmp(method, "time.step") == 0)
+    {
+        int n = params >= 0 ? aiplayJsonGetInt(&doc, params, "ticks") : 1;
+        if (n < 1)
+        {
+            n = 1;
+        }
+        bool ok = aiplayStep(n);
+        if (!ok)
+        {
+            aiplayRespError(out, idRaw, "E_BAD_REQUEST", "step requires paused state");
+            return;
+        }
+        aiplayRespOpen(out, idRaw);
+        aiplayJsonInt(out, "stepped", n);
+        aiplayJsonInt(out, "tick", (int64_t)backend->tick());
+        aiplayRespClose(out);
         return;
     }
     aiplayRespError(out, idRaw, "E_BAD_REQUEST", "unknown method");

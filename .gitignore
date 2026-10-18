@@ -62,3 +62,12 @@ windows/build/*
 # disc asset extraction output
 output/
 tools/REWise/
+
+# disc image (do not commit; too large to diff)
+*.bin
+
+# disc image (do not commit; too large to diff)
+*.bin
+
+__pycache__/
+*.pyc

@@ -12,12 +12,14 @@ void aiplayTestCheck(int cond, const char *name, const char *file, int line);
 extern void testJsonAll(void);
 extern void testSessionAll(void);
 extern void testTransportAll(void);
+extern void testSnapshotAll(void);
 
 int main(void)
 {
     testJsonAll();
     testSessionAll();
     testTransportAll();
+    testSnapshotAll();
 
     printf("aiplay-tests: %d checks, %d failures\n", aiplayTestsRun, aiplayTestsFailed);
     return aiplayTestsFailed == 0 ? 0 : 1;

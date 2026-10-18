@@ -20,5 +20,6 @@ void            stubSetAI(int i, bool ai);
 void            stubSetMap(const char *m);
 uint32_t        stubAdvanceTick(void);
 int             stubNeutralizedIndex(void);
+void            testSyncShipsHook(void);   // emulate engine tick-end ship sync
 
 #endif // AIPLAY_TEST_STUB_H

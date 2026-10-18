@@ -772,6 +772,13 @@ bool32 animAviPlay(sdword a, sdword b)
     dbgMessage("animAviPlay: Entering");
 #endif
 
+    // /disableAVI also skips in-game animatics (feature 002: fast test rounds)
+    extern bool32 enableAVI;
+    if (enableAVI == FALSE)
+    {
+        return FALSE;
+    }
+
     bool32 rval = TRUE;
 
 #ifdef HW_ENABLE_MOVIES

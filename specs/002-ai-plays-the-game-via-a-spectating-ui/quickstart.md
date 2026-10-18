@@ -12,9 +12,9 @@ HW_Data=$ASSETS_FOLDER ./build/homeworld --ai-play=/tmp/hw-ai.sock
 1. Through the normal UI, start a skirmish (player 0 = Kushan, CPU opponent).
 2. In a second terminal, drive the layer directly:
    ```sh
-   python3 tools/aiplay-mcp.py --socket /tmp/hw-ai.sock            # MCP server (stdio)
+   python3 tools/aiplay_mcp.py --socket /tmp/hw-ai.sock            # MCP server (stdio)
    # or raw test client during converge:
-   python3 tools/aiplay-rawtest.py bind 0 && ... state.snapshot ...
+   python3 tools/aiplay_rawtest.py bind 0 && ... state.snapshot ...
    ```
 3. Assert through the window: the AI-ordered ships visibly move/fight within ~1s
    (SC-003); HUD shows player 0 RUs building correctly; no crashes.
