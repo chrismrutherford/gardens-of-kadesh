@@ -117,6 +117,34 @@ HW_Data=$ASSETS_FOLDER ./homeworld
 
 where `./homeworld` is the path to your HomeworldSDL binary executable.
 
+### AI spectating mode
+
+You can let an AI agent play one side of a skirmish while you watch the normal, live
+game window. Launch the game with the AI-play layer enabled:
+
+```sh
+HW_Data=$ASSETS_FOLDER ./homeworld /aiPlay
+```
+
+This creates a local-only control socket (`/tmp/homeworld-aiplay.sock`, permissions
+`0600`). The optional MCP sidecar exposes it as a standard MCP HTTP server bound to
+`127.0.0.1` only (default port `8000`):
+
+```sh
+python3 tools/aiplay_mcp.py --port 8000
+```
+
+Point any MCP client at `http://127.0.0.1:8000/mcp`. You will keep full normal use of
+the window — HUD, camera, everything renders as usual; the AI only issues orders to
+its own bound side. Useful extras:
+
+- `/aiPlay /debugScreenshots /disableAVI` — auto-start a game and skip all intro
+  cinematics/animatics (good for fast test rounds).
+- `python3 tools/aiplay_rawtest.py 'JSON...'` — talk to the layer directly without MCP
+  (see `specs/002-ai-plays-the-game-via-a-spectating-ui/contracts/ai-play.md` for the
+  request/response contract).
+
+
 The game stores its configuration in `~/.homeworld` (on Linux), and will remember the asset directory and graphics configuration for later runs, which means you don't need to provide the `HW_Data` dir the next time you run the game, and you can safely move the executable around.
 
 > ![TIP]

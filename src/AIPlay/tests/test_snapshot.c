@@ -55,6 +55,10 @@ static void testSnapshotContents(void)
     aiplayTickEnd();
 
     handleLine("{\"id\":2,\"method\":\"state.snapshot\"}", &resp);
+    {
+        aiplayJsonDoc sanity;
+        CHECK(aiplayJsonParse(&sanity, resp.data));   // whole-response JSON validity
+    }
     CHECK(contains(&resp, "\"Interceptor\""));
     CHECK(contains(&resp, "\"HeavyCruiser\""));
     CHECK(contains(&resp, "\"Asteroid\""));
@@ -71,6 +75,7 @@ static void testSnapshotContents(void)
     // paused determinism: two snapshots byte-identical
     stubSetPaused(true);
     handleLine("{\"id\":4,\"method\":\"state.snapshot\"}", &resp);
+    // entire response must be valid JSON over the wire
     char snap1[16384];
     strncpy(snap1, resp.data, sizeof(snap1) - 1);
     snap1[sizeof(snap1) - 1] = '\0';
@@ -129,6 +134,10 @@ static void testPauseAndStep(void)
 
     handleLine("{\"id\":3,\"method\":\"time.step\",\"params\":{\"ticks\":3}}", &resp);
     CHECK(contains(&resp, "\"stepped\":3"));
+    {   // whole-envelope validity
+        aiplayJsonDoc sanity;
+        CHECK(aiplayJsonParse(&sanity, resp.data));
+    }
     CHECK(contains(&resp, "\"tick\":3"));
     CHECK(stubStepsRequested() == 3);
 

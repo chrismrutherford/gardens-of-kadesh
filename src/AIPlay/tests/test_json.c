@@ -59,6 +59,10 @@ static void testBindAndSnapshot(void)
     aiplayJsonBufInit(&resp, out, sizeof(out));
 
     aiplayHandleLine("{\"id\":1,\"method\":\"aiSession.bind\",\"params\":{\"playerIndex\":1}}", &resp);
+    {   // whole-response validity (envelope braces)
+        aiplayJsonDoc sanity;
+        CHECK(aiplayJsonParse(&sanity, resp.data));
+    }
     CHECK(bufContains(&resp, "\"playerIndex\":1"));
     CHECK(aiplayBoundPlayer() == 1);
 
@@ -112,6 +116,10 @@ static void testOrderSubmitViaJson(void)
     char line[256];
     snprintf(line, sizeof(line), "{\"id\":11,\"method\":\"order.move\",\"params\":{\"id\":11,\"ships\":[%llu],\"target\":[10,0,20]}}", (unsigned long long)shipId);
     aiplayHandleLine(line, &resp);
+    {   // whole-response validity (envelope braces)
+        aiplayJsonDoc sanity;
+        CHECK(aiplayJsonParse(&sanity, resp.data));
+    }
     CHECK(bufContains(&resp, "\"queued\":true"));
     CHECK(bufContains(&resp, "\"orderId\":11"));
 

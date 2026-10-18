@@ -17,12 +17,42 @@
 #include "ObjTypes.h"
 #include "Options.h"
 #include "ResearchAPI.h"
+#include "Debug.h"
+#include "utility.h"    // utyLoadSinglePlayerGameGivenFilename
 #include "FormationDefs.h"
 #include "CommandLayer.h"
 #include <strings.h>
 
 // set by the /aiPlay command-line option (src/SDL/main.c)
 bool32 aiplayRequested = FALSE;
+
+// set by /aiPlayLoad <savegame name> — auto-load the saved game at startup so
+// test rounds don't re-watch the intro (user convenience, feature 002)
+char aiplayAutoSaveName[128] = "";
+
+extern char SinglePlayerSavedGamesPath[];   // src/Game/GamePick.c
+
+bool32 aiplayCmdlineSave(char *string)
+{
+    strncpy(aiplayAutoSaveName, string, sizeof(aiplayAutoSaveName) - 1);
+    aiplayAutoSaveName[sizeof(aiplayAutoSaveName) - 1] = '\0';
+    return TRUE;
+}
+
+static char aiplaySavePath[512];    // must outlive gameStart's use
+
+void aiplayEngineAutoLoad(void)
+{
+    if (!aiplayRequested || aiplayAutoSaveName[0] == '\0' || aiplayRequested == FALSE)
+    {
+        return;
+    }
+    dbgAssertOrIgnore(aiplaySavePath[0] == 0);
+    strcpy(aiplaySavePath, "SavedGames\\SinglePlayer\\");
+    strcat(aiplaySavePath, aiplayAutoSaveName);
+    dbgMessagef("AI play: auto-loading savegame '%s'", aiplaySavePath);
+    utyLoadSinglePlayerGameGivenFilename(aiplaySavePath);
+}
 
 // generated from Ships/ShipDefs.h ShipType_enum (skipping index -1)
 static const char *aiplayShipTypeNames[] = {
@@ -475,6 +505,7 @@ const aiplayEngineBackend *aiplayEngineBackendGet(void)
 void aiplayEngineInit(void)
 {
     aiplayInit(aiplayRequested != FALSE, NULL, aiplayEngineBackendGet());
+    aiplayEngineAutoLoad();     // /aiPlayLoad: straight into the saved game
 }
 
 // called from utyGameSystemsShutdown

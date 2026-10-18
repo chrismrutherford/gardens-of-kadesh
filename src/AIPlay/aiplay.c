@@ -545,7 +545,9 @@ void aiplayHandleLine(const char *line, aiplayJsonBuf *out)
             aiplayJsonInt(out, "playerIndex", aiplay.boundPlayer);
             aiplayJsonInt(out, "sessionId", (int64_t)AIPLAY_PROTOCOL_VERSION);
             aiplayJsonString(out, "mapName", backend->mapName());
-            aiplayRespClose(out);
+            aiplayJsonTrimComma(out);
+            aiplayJsonBufAddStr(out, "}");     // close result object
+            aiplayRespClose(out);              // close envelope
             return;
         }
         else
@@ -586,6 +588,8 @@ void aiplayHandleLine(const char *line, aiplayJsonBuf *out)
         aiplaySetPaused(true);
         aiplayRespOpen(out, idRaw);
         aiplayJsonBool(out, "paused", true);
+        aiplayJsonTrimComma(out);
+        aiplayJsonBufAddStr(out, "}");     // close result object
         aiplayRespClose(out);
         return;
     }
@@ -594,6 +598,8 @@ void aiplayHandleLine(const char *line, aiplayJsonBuf *out)
         aiplaySetPaused(false);
         aiplayRespOpen(out, idRaw);
         aiplayJsonBool(out, "paused", false);
+        aiplayJsonTrimComma(out);
+        aiplayJsonBufAddStr(out, "}");     // close result object
         aiplayRespClose(out);
         return;
     }
@@ -611,8 +617,11 @@ void aiplayHandleLine(const char *line, aiplayJsonBuf *out)
             return;
         }
         aiplayRespOpen(out, idRaw);
+        aiplayJsonBufAddStr(out, "{");
         aiplayJsonInt(out, "stepped", n);
         aiplayJsonInt(out, "tick", (int64_t)backend->tick());
+        aiplayJsonTrimComma(out);
+        aiplayJsonBufAddStr(out, "}");     // close result object
         aiplayRespClose(out);
         return;
     }

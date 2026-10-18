@@ -609,6 +609,7 @@ bool32 syncDumpInit(char *string1)
 commandoption commandOptions[] =
 {
     entryVr("/aiPlay",              aiplayRequested, TRUE,          " - Enable the AI play layer (local AI-play socket + spectating)."),
+    entryFnParam("/aiPlayLoad",     aiplayCmdlineSave,              " - Auto-load the named saved game at startup (requires /aiPlay)."),
 #ifdef HW_BUILD_FOR_DEBUGGING
     entryComment("DEBUGGING OPTIONS"),//-----------------------------------------------------
     entryVr("/debug",               DebugWindow, TRUE,                  " - Enable debug window."),

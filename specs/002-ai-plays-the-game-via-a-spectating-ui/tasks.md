@@ -95,7 +95,7 @@ logic are unit-tested (`meson test -C build aiplay-tests` green).
       never pauses or stops the sim; rebind re-attaches with regenerated ids and
       event `matchContinued`; handle mid-order-stream disconnect (queued orders still
       drain) — scripted verify per quickstart Scenario A step 3 and Scenario C step 3
-- [ ] T016 [US1] Verify spectating invariants per FR-008/FR-009 with a manual scripted
+- [X] T016 [US1] Verify spectating invariants per FR-008/FR-009 with a manual scripted
       run (quickstart Scenario D): vanilla-launch byte-identical behavior with `--ai-play`
       absent; spectator camera movement produces no snapshot delta beyond tick advance
 
@@ -203,16 +203,16 @@ continues with orders intact (spec acceptance 1–2, quickstart Scenario B).
 
 ## Phase 7: MCP HTTP sidecar + Polish
 
-- [ ] T032 Implement `tools/aiplay_mcp.py`: HTTP MCP server bound to **127.0.0.1 only**
+- [X] T032 Implement `tools/aiplay_mcp.py`: HTTP MCP server bound to **127.0.0.1 only**
       (default port 8000, `--port`), standard MCP Streamable HTTP binding
       (`initialize`, `tools/list`, `tools/call`), relaying each tool call to the game's
       UDS endpoint per contracts/ai-play.md; tools: bind_session, game_status,
       observe, get_events, order_move, order_attack, order_guard, order_dock,
       order_harvest, order_special, order_halt, order_build, order_research,
       order_formation, pause, resume, step; `--http` is the default mode
-- [ ] T033 [P] Write `tools/aiplay_mcp.py` smoke tests (spin server, list tools, call
+- [X] T033 [P] Write `tools/aiplay_mcp.py` smoke tests (spin server, list tools, call
       observe against a stub UDS server) as `tools/tests/test_aiplay_mcp.py`
-- [ ] T034 [P] Update `documentation/community/installation-manual.md` with an
+- [X] T034 [P] Update `documentation/community/installation-manual.md` with an
       "AI spectating mode" section (launch flag, MCP sidecar usage, localhost-only note)
       and the run instructions from quickstart.md
 - [ ] T035 Run full quickstart.md validation (Scenarios A–D) and record evidence in the

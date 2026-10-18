@@ -21,5 +21,9 @@ void            stubSetMap(const char *m);
 uint32_t        stubAdvanceTick(void);
 int             stubNeutralizedIndex(void);
 void            testSyncShipsHook(void);   // emulate engine tick-end ship sync
+void *          stubAddShip(const char *type, int owner, float x, float y, float z);
+void *          stubAddResource(int value, float x, float y, float z);
+void            stubSetMoving(void *handle, float x, float y, float z);
+void            stubKill(void *handle);
 
 #endif // AIPLAY_TEST_STUB_H

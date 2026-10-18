@@ -68,9 +68,16 @@ static void writeVec(aiplayJsonBuf *out, const float v[3])
 
 static struct shipFilter filter;
 
-static bool writeObjectEntry(const aiplayIdIterItem *item, void *ctx)
+typedef struct snapshotCtx
 {
-    aiplayJsonBuf *out = (aiplayJsonBuf *)ctx;
+    aiplayJsonBuf *out;
+    bool          wroteAny;   // comma separator between array entries
+} snapshotCtx;
+
+static bool writeObjectEntry(const aiplayIdIterItem *item, void *ctxVoid)
+{
+    snapshotCtx *ctx = (snapshotCtx *)ctxVoid;
+    aiplayJsonBuf *out = ctx->out;
     const aiplayEngineBackend *be = aiplayBackendGet();
     if (be == NULL || be->shipInfo == NULL)
     {
@@ -87,6 +94,10 @@ static bool writeObjectEntry(const aiplayIdIterItem *item, void *ctx)
         {
             return true;
         }
+        if (ctx->wroteAny)
+        {
+            aiplayJsonBufAdd(out, ",", 1);
+        }
         aiplayJsonBufAdd(out, "{", 1);
     }
     else
@@ -95,8 +106,13 @@ static bool writeObjectEntry(const aiplayIdIterItem *item, void *ctx)
         {
             return true;
         }
+        if (ctx->wroteAny)
+        {
+            aiplayJsonBufAdd(out, ",", 1);
+        }
         aiplayJsonBufAdd(out, "{", 1);
     }
+    ctx->wroteAny = true;
     aiplayJsonInt(out, "id", (int64_t)item->id);
     aiplayJsonInt(out, "owner", item->owner);
     aiplayJsonString(out, "type", info.typeName != NULL ? info.typeName : "Unknown");
@@ -159,15 +175,17 @@ void aiplaySnapshotWrite(aiplayJsonBuf *out, const aiplayJsonDoc *doc, int32_t p
     }
     aiplayJsonBufAdd(out, "],", 2);
 
+    snapshotCtx ctx = {.out = out, .wroteAny = false};
     aiplayJsonBufAddStr(out, "\"ships\":[");
     filter.wantShips     = true;
     filter.wantResources = false;
-    aiplayIdEach(writeObjectEntry, out);
+    aiplayIdEach(writeObjectEntry, &ctx);
     aiplayJsonBufAdd(out, "],", 2);
 
+    ctx.wroteAny = false;
     aiplayJsonBufAddStr(out, "\"resources\":[");
     filter.wantResources = true;
-    aiplayIdEach(writeObjectEntry, out);
+    aiplayIdEach(writeObjectEntry, &ctx);
     aiplayJsonBufAdd(out, "],", 2);
 
     aiplayJsonRaw(out, "buildQueue", "[]");

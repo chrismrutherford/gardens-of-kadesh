@@ -286,7 +286,9 @@ void aiplayOrderSubmitJson(
         aiplayJsonBufAddStr(out, "{");
         aiplayJsonBool(out, "queued", true);
         aiplayJsonInt(out, "orderId", (int64_t)req.id);
-        aiplayRespClose(out);
+        aiplayJsonTrimComma(out);
+        aiplayJsonBufAddStr(out, "}");     // close result object
+        aiplayRespClose(out);              // close envelope
     }
     else
     {
