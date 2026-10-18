@@ -1,0 +1,15 @@
+- generic [active] [ref=f1e1]:
+  - generic [ref=f1e2]:
+    - img "Error 403 Illustration" [ref=f1e4]
+    - generic [ref=f1e5]:
+      - generic [ref=f1e6]: Forbidden
+      - generic [ref=f1e7]: You don't have access to this page right now.
+      - generic [ref=f1e8]:
+        - text: You can go back to the previous page or return safely to the
+        - link "homepage" [ref=f1e9] [cursor=pointer]:
+          - /url: https://www.fandom.com
+        - text: .
+  - contentinfo [ref=f1e10]:
+    - text: "Request ID:"
+    - code [ref=f1e11]: a4c9551fed6e60b5
+    - text: Please include this in any bug reports.

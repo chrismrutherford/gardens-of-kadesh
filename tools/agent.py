@@ -276,7 +276,21 @@ def world_summary(view):
 
 # ---------------------------------------------------------------- main loop
 
+
+def guard_call(name, args, snapshot):
+    """Post-parse safety for a native tool call (lean version)."""
+    if not isinstance(args, dict):
+        args = {}
+    if "id" not in args or not isinstance(args["id"], (int, float)):
+        args["id"] = int(time.time()) % 100000
+    if name == "save_game":
+        # zero-padded tick: 12 digits so string sort == time sort
+        args["name"] = f"autosave-{snapshot.get('tick', 0):012d}"
+    return args
+
+
 def main():
+
     global LOGFILE
     ap = argparse.ArgumentParser(description="Homeworld LLM fleet commander")
     ap.add_argument("--mcp", default="http://127.0.0.1:8302/mcp")
@@ -290,6 +304,13 @@ def main():
     LOGFILE = a.logfile
 
     session_banner(f"player={a.player} mcp={a.mcp} llm={a.llm} rounds={a.max_rounds}")
+    # load the playbook (build costs + research chains extracted from game data)
+    pb = ""
+    try:
+        pb = open(__file__.rsplit("/", 1)[0] + "/../documentation/community/ai-playbook.md").read()
+    except OSError:
+        pass  # stay lean if missing
+    messages_sys = SYSTEM_PROMPT + ("\n\n=== PLAYBOOK (authoritative game data) ===\n" + pb) if pb else SYSTEM_PROMPT
     llm = LLM(a.llm, a.model)
 
     while True:
@@ -316,7 +337,7 @@ def main():
         log("bind pending (match loading); retry in 5s")
         time.sleep(5)
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": messages_sys}]
     rnd = 0
     next_event_idx = 0
 
@@ -326,7 +347,7 @@ def main():
     nags = [
         {"every": 600, "last": 0, "active": False, "trigger": "save_game", "msg":
          "SAVE NAG: it has been ~10 minutes since the last save. Call save_game "
-         "with a fresh name like 'autosave-tick-<tick>' THIS round."},
+         "— the agent will name it (zero-padded tick) — just call it THIS round."},
         {"every": 300, "last": 0, "active": False, "trigger": None, "msg":
          "ECONOMY NAG: review RU income — make sure 2+ ResourceCollectors are "
          "harvesting and one more is queued if income is low."},
@@ -405,8 +426,7 @@ def main():
                     args = json.loads(call["args"] or "{}")
                 except ValueError:
                     args = {}
-                if "id" in args and not isinstance(args["id"], (int, float)):
-                    args["id"] = int(time.time()) % 100000
+                args = guard_call(name, args, snap)
                 log("[round %d] tool  : %s %s" % (
                     rnd, name, json.dumps(args)[:150]))
                 if name == "save_game":
