@@ -59,7 +59,12 @@ def relay(request: dict) -> dict:
     tool = method[6:] if method.startswith("tools/") else method
     name = tool if tool in METHOD_FOR_TOOL or tool in VERB_FOR_TOOL else request.get("tool", "")
     params = dict(request.get("params", {}) or {})
-    req_id = params.pop("id", 1)
+    # keep params.id intact for order tools (the engine echoes it in events);
+    # only use it as the envelope id when it's a plain number
+    raw_id = params.get("id")
+    req_id = raw_id if isinstance(raw_id, (int, float)) else 1
+    if not isinstance(params.get("id"), (int, float)):
+        params.pop("id", None)
 
     if name in METHOD_FOR_TOOL:
         wire = {"id": req_id, "method": METHOD_FOR_TOOL[name]}

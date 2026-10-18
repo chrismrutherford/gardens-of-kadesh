@@ -237,9 +237,9 @@ def action_guard(action, snapshot, player):
         else:
             return {"tool": "order_build", "args": {"type": "LightInterceptor"},
                     "thought": "no enemy ships visible; keep building"}
-    if "id" not in args:
-        args["id"] = action.get("thought", "")[:20] + str(time.time())
-    action["args"] = args
+    if "id" not in args or not isinstance(args["id"], (int, float)):
+        args["id"] = int(time.time()) % 100000   # short numeric ids: the layer
+    action["args"] = args                        # echoes them into JSON envelopes
     return action
 
 
