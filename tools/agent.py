@@ -368,6 +368,11 @@ def main():
                 time.sleep(5)
                 continue
             view = compress_snapshot(snap)
+            if view["tick"] < last_tick_seen:
+                log("[round %d] MATCH RESET detected (tick %d -> %d); ids regenerated"
+                    % (rnd, last_tick_seen, view["tick"]))
+                next_event_idx = 0          # fresh event stream
+            last_tick_seen = max(last_tick_seen, view["tick"])
             log("[round %d] world: %s" % (rnd, world_summary(view)))
 
             if not snap.get("matchStatus", {}).get("running", False):

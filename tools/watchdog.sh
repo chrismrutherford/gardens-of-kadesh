@@ -5,6 +5,14 @@
 #
 # Usage: tools/watchdog.sh [<savegame> ...]   (default: cmr1)
 set -u
+PIDFILE="/tmp/aiplay-watchdog.pid"
+if [[ -f "$PIDFILE" ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    echo "watchdog already running (pid $(cat "$PIDFILE"))"
+    exit 0
+fi
+echo $$ > "$PIDFILE"
+trap 'rm -f "$PIDFILE"' EXIT
+
 SAVE="${1:-cmr1}"
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
 SOCK="/tmp/homeworld-aiplay.sock"
