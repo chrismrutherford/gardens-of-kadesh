@@ -26,7 +26,7 @@
 | FR-006 invalid orders rejected | live: unknown id → `E_BAD_ID`; pre-match → gating; unaffordable build → `E_UNAFFORDABLE` (unit) | PASS |
 | FR-007 order order preserved | queue FIFO + drain at tick boundary (unit tests, whole order applied within one tick) | PASS |
 | FR-008 normal visible session | live game rendered/ran through the whole session with the layer enabled; no second window; layer inert without flag (vanilla run verified separately) | PASS |
-| FR-009 spectator camera can't affect state | enforced by design (camera not read anywhere in layer) — explicit live check pending (T039) | PARTIAL (design-enforced) |
+| FR-009 spectator camera can't affect state | LIVE: sim paused, user freely moved camera, two snapshots byte-identical (12 ships / 205 resources), resumed cleanly (T039 done) | PASS |
 | FR-010 disconnect survives | transport closes clients cleanly; reconnect path unit-covered — live disconnect test pending (T038) | PARTIAL |
 | FR-011 pause/resume/step | live: pause ⇒ byte-identical snapshots; step 2 ticks ⇒ tick 4686; resume OK | PASS |
 | FR-012 real-time default | layer never pauses unless asked; pause optional (live) | PASS |
@@ -36,7 +36,7 @@
 | SC-001 full skirmish spectated start-to-victory | match ran ~10+ min with layer active; full victory run pending agent/soak (T040) | PARTIAL |
 | SC-002 snapshot ⇔ screen agreement | snapshot fields sourced from the same engine lists the renderer uses; positions live-checked | PASS |
 | SC-003 order → screen ≤1s | order queued→applied within one tick; 603 world units of movement observed ~6s later; applied at next tick | PASS |
-| SC-004 camera delta zero | by construction; explicit test pending (T039) | PARTIAL |
+| SC-004 camera delta zero | LIVE verified with frozen sim (T039 done) | PASS |
 | SC-005 coherent pause | byte-identical paused snapshots (live + unit) | PASS |
 
 ## Bugs found & fixed during verification
