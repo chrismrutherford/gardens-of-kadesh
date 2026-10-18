@@ -244,6 +244,7 @@ def compress_snapshot(snap):
         "players": snap.get("players"),
         "buildQueue": snap.get("buildQueue", []),
         "research": snap.get("research", []),
+        "techTree": snap.get("techTree", {}),   # labs + locked hulls + missing techs
     }
     out["ships"] = [{"id": s["id"], "owner": s["owner"], "type": s["type"],
                      "pos": [round(c) for c in s["pos"]],

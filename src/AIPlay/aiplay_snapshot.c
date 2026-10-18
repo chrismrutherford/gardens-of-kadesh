@@ -222,6 +222,18 @@ void aiplaySnapshotWrite(aiplayJsonBuf *out, const aiplayJsonDoc *doc, int32_t p
     }
     aiplayJsonBufAdd(out, "],", 2);
 
+    // exact tech tree from the engine (labs, research gate, locked hulls)
+    aiplayJsonBufAddStr(out, "\"techTree\":");
+    if (be != NULL && be->techTreeJSON != NULL && aiplayBoundPlayer() >= 0)
+    {
+        be->techTreeJSON(out, aiplayBoundPlayer());
+    }
+    else
+    {
+        aiplayJsonBufAddStr(out, "{}");     // no backend: empty tree object
+    }
+    aiplayJsonBufAdd(out, ",", 1);
+
     // match status: winner is known when the simulation has stopped
     bool running = be != NULL && be->gameRunning();
     aiplayJsonBufAddStr(out, "\"matchStatus\":{");

@@ -57,6 +57,10 @@ static void testSnapshotContents(void)
     handleLine("{\"id\":2,\"method\":\"state.snapshot\"}", &resp);
     {
         aiplayJsonDoc sanity;
+        if (!aiplayJsonParse(&sanity, resp.data))
+        {
+            printf("DBG-SNAP: %s\n", resp.data);
+        }
         CHECK(aiplayJsonParse(&sanity, resp.data));   // whole-response JSON validity
     }
     CHECK(contains(&resp, "\"Interceptor\""));

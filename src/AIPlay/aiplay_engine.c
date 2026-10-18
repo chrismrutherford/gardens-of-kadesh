@@ -19,6 +19,7 @@
 #include "CommandDefs.h"
 #include "ShipSelect.h"
 #include "ResearchAPI.h"
+#include "Attributes.h"
 #include "Debug.h"
 #include "utility.h"    // utyLoadSinglePlayerGameGivenFilename
 #include "FormationDefs.h"
@@ -659,6 +660,73 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
 
 // --------------------------------------------------------------- backend table
 
+// exact research/build tree from the engine (rmCanBuildShip + tech masks)
+static void backendTechTreeJSON(aiplayJsonBuf *out, int playerIndex)
+{
+    Player *p = &universe.players[playerIndex];
+    // labs = ResearchShips owned by this player (each is one lab)
+    udword labs = 0;
+    Node *node = universe.ShipList.head;
+    while (node != NULL)
+    {
+        Ship *ship = (Ship *)listGetStructOfNode(node);
+        node = node->next;
+        if (ship->playerowner == p && ship->shiptype == ResearchShip)
+        {
+            labs++;
+        }
+    }
+
+    aiplayJsonBufAddStr(out, "{");
+    aiplayJsonInt(out, "labs", (int64_t)labs);
+    aiplayJsonBool(out, "canResearch", p->researchinfo.CanDoResearch != FALSE);
+
+    aiplayJsonBufAddStr(out, "\"locked\":[");
+    bool first = true;
+    for (ShipType type = 0; type < (ShipType)TRADERS_LAST_SHIP; type = (ShipType)((sdword)type + 1))
+    {
+        if (p->researchinfo.techstat == NULL)
+        {
+            break;
+        }
+        if (rmCanBuildShip(p, type))
+        {
+            continue;    // buildable now: not interesting for planning
+        }
+        if (!first)
+        {
+            aiplayJsonBufAdd(out, ",", 1);
+        }
+        first = false;
+        aiplayJsonBufAdd(out, "{", 1);
+        aiplayJsonString(out, "type", shipTypeName(type));
+        udword need = p->researchinfo.techstat->TechNeededToBuildShip[(sdword)type];
+        aiplayJsonBool(out, "disabled", bitTest(need, RM_Disabled) != 0);
+        aiplayJsonBufAddStr(out, "\"missing\":[");
+        bool mfirst = true;
+        for (TechnologyType tech = 0; tech < NumTechnologies; tech = (TechnologyType)((sdword)tech + 1))
+        {
+            if (bitTest(need, TechToBit(tech)) &&
+                !bitTest(p->researchinfo.HasTechnology, TechToBit(tech)))
+            {
+                if (!mfirst)
+                {
+                    aiplayJsonBufAdd(out, ",", 1);
+                }
+                mfirst = false;
+                aiplayJsonString(out, "", TechTypeToString(tech));
+                aiplayJsonTrimComma(out);
+            }
+        }
+        aiplayJsonBufAdd(out, "],", 2);
+        aiplayJsonTrimComma(out);
+        aiplayJsonBufAdd(out, "}", 1);
+    }
+    aiplayJsonBufAdd(out, "],", 2);
+    aiplayJsonTrimComma(out);
+    aiplayJsonBufAdd(out, "}", 1);
+}
+
 static void backendTraceLog(const char *line)
 {
     dbgMessagef("%s", line);
@@ -685,6 +753,7 @@ static const aiplayEngineBackend engineBackend = {
     backendResearchJSON,
     backendSaveGame,      // defined below (GamePick.c plumbing)
     backendTraceLog,
+    backendTechTreeJSON,
 };
 
 const aiplayEngineBackend *aiplayEngineBackendGet(void)

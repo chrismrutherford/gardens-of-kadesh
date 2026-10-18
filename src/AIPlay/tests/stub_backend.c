@@ -221,11 +221,24 @@ static void stTraceLog(const char *line)
     printf("STUB-LOG: %s\n", line);
 }
 
+static bool stSaveGame(const char *name)
+{
+    printf("STUB-SAVE: %s\n", name);
+    return true;
+}
+
+static void stTechTreeJSON(aiplayJsonBuf *out, int playerIndex)
+{
+    aiplayJsonBufAddStr(out, "{}");   // tests don't exercise the tree: bare object
+}
+
 static const aiplayEngineBackend stubBackend = {
     sbNumPlayers, sbPlayerAlive, sbPlayerIsAI, sbResourceUnits, sbMapName,
     sbGameRunning, sbTick, sbTimeElapsed, sbIsPaused, sbSetNeutralized, sbDispatch,
     sbShipInfo, sbSetPaused, sbStep,
+    stSaveGame,
     stTraceLog,
+    stTechTreeJSON,
 };
 
 void testSyncShipsHook(void)

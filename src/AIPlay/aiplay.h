@@ -166,6 +166,8 @@ typedef struct aiplayEngineBackend
     bool     (*saveGame)(const char *name);
     // diagnostics sink (engine: dbgMessagef; tests: stdout); may be NULL
     void     (*traceLog)(const char *line);
+    // exact research/build tree from the player's loaded TechStatics
+    void     (*techTreeJSON)(struct aiplayJsonBuf *out, int playerIndex);
 } aiplayEngineBackend;
 
 typedef struct aiplayShipInfo
