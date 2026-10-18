@@ -492,6 +492,7 @@ void aiplayTickBegin(void)
         aiplayEventPush(aiplayEvent_matchOver, 0, (uint64_t)(anyAlive && !multi ? winner + 1 : 0), aiplay.boundPlayer);
     }
     aiplay.lastTick = backend->tick();
+    aiplayIncomeSampleAdd(backend->tick(), backend->playerResourceUnits(aiplay.boundPlayer));
     marksClear();                     // ship id sync starts (glue touches at tick end)
     aiplayOrdersProcessQueue();
 }
@@ -507,7 +508,57 @@ void aiplayTickEnd(void)
 
 // --------------------------------------------------------------- dispatch
 
+
+// ------------------------------------------------------ RU income tracking
+#define AIPLAY_INCOME_HISTORY 12
+typedef struct { uint32_t tick; int64_t ru; } aiplayIncomeSample;
+static aiplayIncomeSample incomeHistory[AIPLAY_INCOME_HISTORY];
+static size_t             incomeCount = 0;
+
+void aiplayIncomeSampleAdd(uint32_t tick, int64_t ru)
+{
+    static uint32_t lastAdded = 0;   // stride: one sample per second of sim time
+    if (lastAdded != 0 && tick - lastAdded < 16)
+    {
+        return;
+    }
+    lastAdded = tick;
+    aiplayIncomeSample *s;
+    if (incomeCount < AIPLAY_INCOME_HISTORY)
+    {
+        s = &incomeHistory[incomeCount++];
+    }
+    else
+    {
+        for (int i = 0; i < AIPLAY_INCOME_HISTORY - 1; i++)
+        {
+            incomeHistory[i] = incomeHistory[i + 1];
+        }
+        s = &incomeHistory[AIPLAY_INCOME_HISTORY - 1];
+    }
+    s->tick = tick;
+    s->ru   = ru;
+}
+
+double aiplayIncomePerMinute(void)
+{
+    // -1.0 until there is at least ~8s (128 ticks) of history
+    if (incomeCount < 2)
+    {
+        return -1.0;
+    }
+    uint32_t dticks = incomeHistory[incomeCount - 1].tick - incomeHistory[0].tick;
+    if (dticks < 128)
+    {
+        return -1.0;
+    }
+    int64_t dru = incomeHistory[incomeCount - 1].ru - incomeHistory[0].ru;
+    double minutes = ((double)dticks / 16.0) / 60.0;
+    return minutes > 0 ? (double)dru / minutes : -1.0;
+}
+
 void aiplayHandleLine(const char *line, aiplayJsonBuf *out)
+
 {
     if (!aiplaySessionReady())
     {

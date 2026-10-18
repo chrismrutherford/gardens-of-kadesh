@@ -644,6 +644,58 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
             (udword)-1, (udword)tech);
         return aiplayError_none;
     }
+    case aiplayVerb_tactics:
+    {
+        static const struct { const char *n; TacticsType t; } tac[] = {
+            {"evasive", Evasive}, {"neutral", Neutral}, {"aggressive", Aggressive},
+        };
+        TacticsType want = (TacticsType)-1;
+        for (unsigned long i = 0; i < sizeof(tac)/sizeof(tac[0]); i++)
+        {
+            if (strcasecmp(tac[i].n, o->name) == 0) { want = tac[i].t; break; }
+        }
+        if (want == (TacticsType)-1)
+        {
+            return aiplayError_badRequest;
+        }
+        clWrapSetTactics(&universe.mainCommandLayer, &select, want);
+        return aiplayError_none;
+    }
+    case aiplayVerb_launch:
+    {
+        // launch docked fighters from the first dock-capable ship given
+        ShipPtr from = select.ShipPtr[0];
+        if (from == NULL || from->shipsInsideMe == NULL)
+        {
+            return aiplayError_badRequest;
+        }
+        SelectCommand docked;
+        docked.numShips = 0;
+        docked.timeLastStatus = 0.0f;
+        InsideShip *inside = (InsideShip *)from->shipsInsideMe->insideList.head;
+        while (inside != NULL && docked.numShips < COMMAND_MAX_SHIPS)
+        {
+            docked.ShipPtr[docked.numShips++] = inside->ship;
+            inside = (InsideShip *)((Node *)inside->node.next);
+        }
+        if (docked.numShips == 0)
+        {
+            return aiplayError_noBuilder;   // nothing docked to launch
+        }
+        clWrapLaunchMultipleShips(&universe.mainCommandLayer, &docked, from);
+        return aiplayError_none;
+    }
+    case aiplayVerb_autolaunch:
+    {
+        udword onOff = strcasecmp(o->name, "on") == 0 ? 1 : 0;
+        clWrapAutoLaunch(onOff, (udword)aiplay.boundPlayer);
+        return aiplayError_none;
+    }
+    case aiplayVerb_scuttle:
+    {
+        clWrapScuttle(&universe.mainCommandLayer, &select);
+        return aiplayError_none;
+    }
     case aiplayVerb_formation:
     {
         TypeOfFormation f = formationFromName(o->name);

@@ -40,10 +40,20 @@ TOOLS = [
     ("step",          "Advance N ticks while paused", {"ticks": {"type": "integer"}}),
     ("save_game",     "Save the match (autosave every ~10 minutes)",
      {"name": {"type": "string", "description": "savegame name (max 64 chars safe chars)"}}),
+    ("order_tactics", "Set combat tactics for ships (aggressive/neutral/evasive)",
+     {"ships": {"type": "array"}, "tactics": {"type": "string"}, "id": {"type": "integer"}}),
+    ("order_launch",  "Launch all docked fighters from a dock-capable ship",
+     {"ships": {"type": "array", "description": "the carrier/mothership id"}, "id": {"type": "integer"}}),
+    ("autolaunch",    "Toggle auto-launch of new fighters (on/off)",
+     {"onOff": {"type": "boolean"}, "id": {"type": "integer"}}),
+    ("order_scuttle", "Scuttle (self-destruct) ships — last resort",
+     {"ships": {"type": "array"}, "id": {"type": "integer"}}),
 ]
 
 VERB_FOR_TOOL = {
     "order_move": "move", "order_attack": "attack", "order_guard": "guard",
+    "order_tactics": "tactics", "order_launch": "launch",
+    "order_scuttle": "scuttle", "autolaunch": "autolaunch",
     "order_dock": "dock", "order_harvest": "harvest", "order_special": "special",
     "order_halt": "halt", "order_build": "build", "order_research": "research",
     "order_formation": "formation",

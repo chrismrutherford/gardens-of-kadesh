@@ -28,8 +28,12 @@ static aiplayVerb verbFromString(const char *s)
         {"halt",      aiplayVerb_halt},
         {"build",     aiplayVerb_build},
         {"research",  aiplayVerb_research},
-        {"formation", aiplayVerb_formation},
-        {"select",    aiplayVerb_select},
+        {"formation",  aiplayVerb_formation},
+        {"select",     aiplayVerb_select},
+        {"tactics",    aiplayVerb_tactics},
+        {"launch",     aiplayVerb_launch},
+        {"autolaunch", aiplayVerb_autolaunch},
+        {"scuttle",    aiplayVerb_scuttle},
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++)
     {
@@ -99,11 +103,20 @@ static aiplayError parseOrder(
     // order.build "type", order.research "tech")
     if (aiplayJsonGet(doc, params, "formation") >= 0 ||
         aiplayJsonGet(doc, params, "type") >= 0 ||
-        aiplayJsonGet(doc, params, "tech") >= 0)
+        aiplayJsonGet(doc, params, "tech") >= 0 ||
+        aiplayJsonGet(doc, params, "tactics") >= 0 ||
+        aiplayJsonGet(doc, params, "onOff") >= 0)
     {
         const char *key = aiplayJsonGet(doc, params, "formation") >= 0 ? "formation"
-                        : (aiplayJsonGet(doc, params, "type") >= 0 ? "type" : "tech");
+                        : (aiplayJsonGet(doc, params, "type") >= 0 ? "type"
+                        : (aiplayJsonGet(doc, params, "tactics") >= 0 ? "tactics"
+                        : (aiplayJsonGet(doc, params, "tech") >= 0 ? "tech" : "onOff")));
         aiplayJsonGetString(doc, params, key, out->name, AIPLAY_MAX_NAME);
+        if (strcmp(key, "onOff") == 0)
+        {   // autolaunch on/off comes as a boolean or the strings on/off
+            if (strcmp(out->name, "1") == 0) { strcpy(out->name, "on"); }
+            if (strcmp(out->name, "0") == 0) { strcpy(out->name, "off"); }
+        }
         out->targetKind = aiplayTarget_name;
     }
     if (aiplayJsonGet(doc, params, "dockWith") >= 0)
@@ -142,6 +155,7 @@ static aiplayError validateOrder(const aiplayOrderRequest *o)
     {
     case aiplayVerb_research:
     case aiplayVerb_select:
+    case aiplayVerb_autolaunch:
         break;  // fleet-wide commands do not need ship ids
     default:
         if (o->numShips == 0)
@@ -188,10 +202,14 @@ static aiplayError validateOrder(const aiplayOrderRequest *o)
         }
         break;
     case aiplayVerb_formation:
+    case aiplayVerb_tactics:
+    case aiplayVerb_autolaunch:
         if (o->name[0] == '\0')
         {
             return aiplayError_badRequest;
         }
+        break;
+    case aiplayVerb_launch:
         break;
     default:
         break;

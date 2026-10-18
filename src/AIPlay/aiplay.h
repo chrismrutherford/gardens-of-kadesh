@@ -67,6 +67,10 @@ typedef enum aiplayVerb
     aiplayVerb_research,
     aiplayVerb_formation,
     aiplayVerb_select,
+    aiplayVerb_tactics,
+    aiplayVerb_launch,
+    aiplayVerb_autolaunch,
+    aiplayVerb_scuttle,
 } aiplayVerb;
 
 typedef enum aiplayTargetKind

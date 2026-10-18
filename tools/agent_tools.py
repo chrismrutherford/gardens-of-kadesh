@@ -102,6 +102,29 @@ TOOLS = [
         "description": "Resume the simulation",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
+        "name": "order_tactics",
+        "description": "Set combat tactics: aggressive (default fighting), neutral, evasive (retreat behaviour)",
+        "parameters": {"type": "object", "properties": {
+            "ships": {"type": "array", "items": {"type": "integer"}},
+            "tactics": {"type": "string", "description": "aggressive|neutral|evasive"},
+            "id": {"type": "integer"}}}}},
+    {"type": "function", "function": {
+        "name": "order_launch",
+        "description": "Launch all docked fighters from a carrier/mothership (they build docked!)",
+        "parameters": {"type": "object", "properties": {
+            "ships": {"type": "array", "items": {"type": "integer"}, "description": "the carrier id"},
+            "id": {"type": "integer"}}}}},
+    {"type": "function", "function": {
+        "name": "autolaunch",
+        "description": "Toggle auto-launch of newly built fighters",
+        "parameters": {"type": "object", "properties": {
+            "onOff": {"type": "boolean"}, "id": {"type": "integer"}}}}},
+    {"type": "function", "function": {
+        "name": "order_scuttle",
+        "description": "Scuttle (self-destruct) ships — last resort only",
+        "parameters": {"type": "object", "properties": {
+            "ships": {"type": "array", "items": {"type": "integer"}}, "id": {"type": "integer"}}}}},
+    {"type": "function", "function": {
         "name": "save_game",
         "description": "Save the match to a named savegame (call when nagged)",
         "parameters": {"type": "object", "properties": {

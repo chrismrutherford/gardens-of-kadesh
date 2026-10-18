@@ -266,7 +266,9 @@ def world_summary(view):
         kinds[s["type"]] = kinds.get(s["type"], 0) + 1
     q = "; ".join(f"{b['type']} ({b.get('ticksRemaining','?')}t)"
                   for b in view.get("buildQueue", [])) or "none"
-    return (f"tick {view.get('tick')} | RU {ru} | fleet: {kinds or 'none'} "
+    inc = view.get("income", -1)
+    inc_s = f"{inc:.1f} RU/min" if isinstance(inc, (int, float)) and inc >= 0 else "unknown"
+    return (f"tick {view.get('tick')} | RU {ru} | income {inc_s} | fleet: {kinds or 'none'} "
             f"| enemies: {len(foes)} | building: {q}")
 
 

@@ -36,6 +36,7 @@ void aiplayTraceLog(const char *line);
 void aiplaySnapshotWrite(aiplayJsonBuf *out, const struct aiplayJsonDoc *doc, int32_t params);
 
 // session extras (aiplay.c)
+double aiplayIncomePerMinute(void);   // RU/min over the recent history window
 bool aiplayIsPaused(void);
 void aiplaySetPaused(bool paused);      // sets engine pause + order allowance
 bool aiplayStep(int ticks);             // step N ticks while paused

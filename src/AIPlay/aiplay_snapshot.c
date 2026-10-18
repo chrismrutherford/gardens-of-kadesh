@@ -174,6 +174,8 @@ void aiplaySnapshotWrite(aiplayJsonBuf *out, const aiplayJsonDoc *doc, int32_t p
     aiplayJsonInt(out, "tick", (int64_t)aiplay.lastTick);
     aiplayJsonDouble(out, "timeElapsed", be != NULL ? be->timeElapsed() : 0.0);
     aiplayJsonBool(out, "paused", aiplayIsPaused());
+    aiplayJsonDouble(out, "income", aiplayIsPaused() ? -1.0
+                                     : (be != NULL ? aiplayIncomePerMinute() : -1.0));
 
     aiplayJsonBufAddStr(out, "\"players\":[");
     int nPlayers = be != NULL ? be->numPlayers() : 0;
