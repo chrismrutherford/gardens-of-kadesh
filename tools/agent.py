@@ -1,41 +1,32 @@
 #!/usr/bin/env python3
-"""Homeworld AI agent (feature 002 / T040) — an LLM that PLAYES the game.
+"""Homeworld AI agent (feature 002 / T040) — an LLM fleet commander.
 
-Talks to:
-  - an LLM (any OpenAI-compatible chat endpoint, default llama.cpp at
-    http://192.168.1.106:9931/) for decisions,
-  - the game via the aiplay MCP sidecar (tools/aiplay_mcp.py -> UDS):
-      http://127.0.0.1:8302/mcp
+Streams from any OpenAI-compatible reasoning LLM (default llama.cpp at
+http://192.168.1.106:9931/), uses NATIVE tool calling for game orders, and
+plays through the aiplay MCP sidecar (http://127.0.0.1:8302/mcp).
 
-Agentic loop: every turn the LLM sees a compressed battlefield snapshot plus
-recent tool results and answers with ONE JSON action:
-    {"thought": "...", "tool": "order_move", "args": {...}}
-The agent executes it through MCP, feeds the result back, and iterates until
-the match ends, the LLM declares victory, or the tick budget is exhausted.
-
-Monitoring: /tmp/aiplay-agent.log is APPENDED across restarts (each run gets a
-session banner). Every turn logs the world summary, the LLM's thought, the
-action taken, the tool result and recent events — `tail -f` friendly.
-Errors never kill the loop: each turn is individually crash-guarded with a
-10 s back-off, and lost game/socket connections rebind automatically.
+Streaming (protophanes-style): reasoning_content deltas are logged LIVE as
+they arrive — `tail -f /tmp/aiplay-agent.log` shows the commander thinking
+token by token — content tokens stream too, and tool calls execute through
+MCP as soon as the model finishes its round.
 
 Usage:
   python3 tools/agent.py [--mcp http://127.0.0.1:8302/mcp] [--player 0]
-      [--llm http://192.168.1.106:9931] [--model NAME] [--max-turns N]
+      [--llm http://192.168.1.106:9931] [--model NAME] [--max-rounds N]
       [--logfile PATH] [--interval SECONDS]
 """
 import argparse
-import datetime
 import json
-import re
 import socket
+import sys
 import time
 import urllib.request
 
-# --------------------------------------------------------------- utilities
+sys.path.insert(0, __file__.rsplit("/", 1)[0])
+from agent_tools import TOOLS, TOOL_NAMES  # noqa: E402
 
 LOGFILE = None
-SESSION = datetime.datetime.now().strftime("session-%H%M%S")
+SESSION = time.strftime("session-%H%M%S")
 
 
 def log(msg):
@@ -48,16 +39,26 @@ def log(msg):
         pass
 
 
+def log_raw(text):
+    """Streamed deltas: written verbatim, live, no newline added."""
+    print(text, end="", flush=True)
+    try:
+        with open(LOGFILE, "a") as f:
+            f.write(text)
+    except OSError:
+        pass
+
+
 def session_banner(meta):
-    """Restart-friendly marker so `tail -f /tmp/aiplay-agent.log` reads well."""
     with open(LOGFILE, "a") as f:
-        f.write("")
         f.write("=" * 72 + "\n")
         f.write(f"### NEW AGENT SESSION {SESSION} @ {time.strftime('%F %T')}\n")
         f.write(f"### {meta}\n")
         f.write("=" * 72 + "\n")
     log("session " + SESSION + " — " + meta)
 
+
+# --------------------------------------------------------------- http utils
 
 def http_json(url, payload=None, timeout=60):
     if payload is None:
@@ -69,9 +70,11 @@ def http_json(url, payload=None, timeout=60):
         return json.loads(r.read())
 
 
-# ------------------------------------------------------------ LLM client
+# ---------------------------------------------------------------- LLM (SSE)
 
 class LLM:
+    """Streaming chat with native tool calling + reasoning (llama.cpp/Qwen3)."""
+
     def __init__(self, base, model=None, temperature=0.4):
         self.base = base.rstrip("/")
         self.model = model
@@ -80,21 +83,60 @@ class LLM:
             models = http_json(self.base + "/v1/models", timeout=10).get("models", [])
             if not models:
                 raise RuntimeError("LLM exposes no models: " + self.base)
-            path = models[0]["model"]
-            self.model = path.split("/")[-1]      # short name works on llama.cpp
-        log(f"LLM: {self.base} model={self.model}")
+            self.model = models[0]["model"].split("/")[-1]
+        log(f"LLM: {self.base} model={self.model} (streaming + native tools)")
 
-    def chat(self, messages):
-        out = http_json(self.base + "/v1/chat/completions", {
+    def chat_stream(self, messages):
+        """Consume the SSE stream; log deltas live; return (content, calls)."""
+        payload = {
             "model": self.model,
             "messages": messages,
+            "tools": TOOLS,
+            "stream": True,
             "temperature": self.temperature,
-            "max_tokens": 700,
-        }, timeout=600)
-        return out["choices"][0]["message"]["content"]
+            "max_tokens": 900,
+            "chat_template_kwargs": {"enable_thinking": True},
+        }
+        req = urllib.request.Request(
+            self.base + "/v1/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"})
+        content = ""
+        calls = {}
+        with urllib.request.urlopen(req, timeout=600) as r:
+            for raw in r:
+                line = raw.decode("utf-8", errors="replace").strip()
+                if not line.startswith("data: "):
+                    continue
+                data = line[6:]
+                if data.strip() == "[DONE]":
+                    break
+                try:
+                    ch = json.loads(data)["choices"][0]
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    continue
+                d = ch.get("delta", {})
+                if d.get("reasoning_content"):
+                    log_raw(d["reasoning_content"])
+                if d.get("content") is not None:
+                    log_raw(d["content"])
+                    content += d["content"]
+                for tc in d.get("tool_calls") or []:
+                    i = tc.get("index", 0)
+                    slot = calls.setdefault(i, {"id": "", "name": "", "args": ""})
+                    if tc.get("id"):
+                        slot["id"] = tc["id"]
+                    fn = tc.get("function", {})
+                    if fn.get("name"):
+                        slot["name"] += fn["name"]
+                    if fn.get("arguments"):
+                        slot["args"] += fn["arguments"]
+        log_raw("\n")
+        tool_calls = [calls[k] for k in sorted(calls)]
+        return content, tool_calls
 
 
-# ------------------------------------------------------------ MCP client
+# ---------------------------------------------------------------- MCP client
 
 class MCP:
     def __init__(self, url):
@@ -103,7 +145,7 @@ class MCP:
             "jsonrpc": "2.0", "id": 1, "method": "initialize",
             "params": {"protocolVersion": "2025-06-18",
                        "capabilities": {"tools": {}},
-                       "clientInfo": {"name": "homeworld-agent", "version": "0.2"}},
+                       "clientInfo": {"name": "homeworld-agent", "version": "0.3"}},
         }, timeout=30)
         self.server = init.get("result", {}).get("serverInfo", {})
 
@@ -114,43 +156,19 @@ class MCP:
         }, timeout=120)
 
 
-def result_text(mcp_out, limit=260):
-    text = mcp_out["result"]["content"][0]["text"]
-    text = text.replace("\n", " ")
-    return text[:limit]
-
-
-def wait_for_game(mcp, tries=60, player=0):
-    sock_path = "/tmp/homeworld-aiplay.sock"
-    for i in range(tries):
-        try:
-            socket.socket(socket.AF_UNIX).connect(sock_path)
-        except OSError:
-            if i % 10 == 0:
-                log("waiting for game socket...")
-            time.sleep(3)
-            continue
-        st = json.loads(mcp.call("game_status", {})["result"]["content"][0]["text"])
-        if st.get("error"):
-            log("game not ready: " + st["error"])
-            time.sleep(5)
-            continue
-        log(f"match status: state={st['result']['state']} map={st['result']['mapName']}")
-        return st["result"]
-        # lobby is fine: bind + wait loop handles the rest
-    raise RuntimeError("game never became ready")
+def result_text(mcp_out, limit=280):
+    return mcp_out["result"]["content"][0]["text"].replace("\n", " ")[:limit]
 
 
 def ensure_bound(mcp, player):
     r = mcp.call("bind_session", {"playerIndex": player})
-    txt = result_text(r, 120)
-    if '"error"' in txt:
+    if '"error"' in result_text(r, 120):
         return False
     log("bound to player %d" % player)
     return True
 
 
-# --------------------------------------------------------- prompt building
+# ---------------------------------------------------------------- prompting
 
 SYSTEM_PROMPT = """You are the fleet commander AI for a Homeworld (1999-style) RTS game,
 playing one side of a real-time skirmish while a human spectates the live game window.
@@ -158,48 +176,37 @@ playing one side of a real-time skirmish while a human spectates the live game w
 The battlefield has NO fog of war: you see every enemy ship. Coordinates are 3-D
 floats [x,y,z]; distances are large (hundreds to tens of thousands of units).
 
-Your resources (RU) pay for ships. Ships: ResourceCollector harvests asteroids for
-RU, a Mothership (or Carrier) builds ships, interceptors/corvettes fight. Builds
-take time: check the buildQueue before ordering another build.
+Your resources (RU) pay for ships. ResourceCollectors harvest asteroids for RU,
+the Mothership builds ships, interceptors/corvettes fight. Builds take time —
+check buildQueue before ordering more builds.
 
-Reply with exactly ONE json object, nothing else:
-{"thought": "one or two sentences of reasoning",
- "tool": "<one of: order_move, order_attack, order_guard, order_dock,
-          order_harvest, order_special, order_halt, order_build, order_research,
-          order_formation, pause, resume, step, game_status, observe, get_events>",
- "args": {...tool args...}}
+Call ONE tool per round. The tool result plus a fresh snapshot arrive next
+round. Keep commanding the fleet; when the match is over, call game_status.
 
-Principles:
-1. Always keep 2+ ResourceCollectors harvesting (order_harvest the nearest unclaimed Asteroid).
-2. Build ResourceCollectors early, then combat ships (order_build type="LightInterceptor").
-3. Attack in groups: pick ONE enemy ship id, order 3+ fighters to attack it (order_attack).
-4. Keep your Mothership away from danger (order_move if enemies approach it).
-5. Don't re-order a ship that is already executing a similar order (see each ship's
-   "order" field and the buildQueue).
-6. If the game is paused, use resume. Use observe before deciding.
-
-Each turn you receive: a world summary, the result of your last action, and recent
-events (orderApplied/orderRejected/shipDestroyed...). When you see "matchOver",
-the game has ended.
+Strategy:
+1. Keep 2+ ResourceCollectors harvesting (order_harvest nearest asteroid).
+2. Build ResourceCollectors early, then combat ships (order_build).
+3. Attack in groups of 3+: pick ONE enemy ship id (order_attack).
+4. Keep the Mothership away from danger (order_move).
+5. Don't re-order ships already executing similar orders (see each ship's
+   "order" field and the buildQueue in the snapshot).
 """
 
 
 def compress_snapshot(snap):
-    """Trim the full snapshot to what fits comfortably in a context window."""
     out = {
         "tick": snap.get("tick"),
         "paused": snap.get("paused"),
         "matchStatus": snap.get("matchStatus"),
         "players": snap.get("players"),
-        "buildQueue": snap.get("buildQueue", []),   # in-progress builds: don't spam
+        "buildQueue": snap.get("buildQueue", []),
         "research": snap.get("research", []),
     }
-    ships = [{"id": s["id"], "owner": s["owner"], "type": s["type"],
-              "pos": [round(c) for c in s["pos"]],
-              "health": round(s["health"]),
-              "order": (s.get("order") or {}).get("verb", "idle")}
-             for s in snap.get("ships", []) if s.get("health", 0) > 0]
-    out["ships"] = ships[:80]
+    out["ships"] = [{"id": s["id"], "owner": s["owner"], "type": s["type"],
+                     "pos": [round(c) for c in s["pos"]],
+                     "health": round(s["health"]),
+                     "order": (s.get("order") or {}).get("verb", "idle")}
+                    for s in snap.get("ships", []) if s.get("health", 0) > 0][:80]
     out["resources"] = [{"id": r["id"], "value": r.get("value", 0),
                          "pos": [round(c) for c in r["pos"]]}
                         for r in snap.get("resources", [])[:40]]
@@ -219,63 +226,6 @@ def world_summary(view):
             f"| enemies: {len(foes)} | building: {q}")
 
 
-def nearest_unclaimed(resources, ships):
-    myships = [s for s in ships if s["owner"] == 0]
-    if not resources:
-        return None
-    home = myships[0]["pos"] if myships else [0, 0, 0]
-    cand = sorted(resources, key=lambda r: sum((a-b)**2 for a, b in zip(r["pos"], home)))
-    for r in cand:
-        if sum((a-b)**2 for a, b in zip(r["pos"], home)) > 2_000_000:
-            return r["id"]
-    return cand[0]["id"] if cand else None
-
-
-def action_guard(action, snapshot):
-    """Apply light-weight heuristics so a weak LLM can still be useful."""
-    if not isinstance(action, dict) or "tool" not in action:
-        return {"tool": "observe", "args": {}, "thought": "fallback: unparseable action"}
-    tool, args = action["tool"], dict(action.get("args") or {})
-    args.pop("shipId", None); args.pop("ship_ids", None); args.pop("target_id", None)
-    if "id" not in args or not isinstance(args["id"], (int, float)):
-        args["id"] = int(time.time()) % 100000
-
-    collectors = [s["id"] for s in snapshot.get("ships", [])
-                  if s["owner"] == 0 and s["type"] == "ResourceCollector"]
-    mobile = [s["id"] for s in snapshot.get("ships", [])
-              if s["owner"] == 0 and "Mothership" not in s["type"]]
-
-    if tool in ("order_harvest",):
-        if "target" not in args:
-            tid = nearest_unclaimed(
-                [{"id": r["id"], "pos": r["pos"]} for r in snapshot.get("resources", [])],
-                snapshot.get("ships", []))
-            if tid is None:
-                return {"tool": "order_build", "args": {"type": "LightInterceptor"},
-                        "thought": "no asteroids left; keep building"}
-            args["target"] = tid
-        args["ships"] = args.get("ships") or collectors or mobile[:1]
-    if tool in ("order_build",) and not args.get("type"):
-        args["type"] = "LightInterceptor"
-    if tool in ("order_build",):
-        args["ships"] = args.get("ships") or \
-            ([s["id"] for s in snapshot.get("ships", [])
-              if s["owner"] == 0 and s["type"] == "Mothership"] or mobile[:1])
-    if tool in ("order_move", "order_formation", "order_special", "order_halt",
-                "order_guard", "order_attack", "order_dock"):
-        args["ships"] = args.get("ships") or mobile[:1]
-    if tool in ("order_attack",) and not args.get("target"):
-        enemies = [s["id"] for s in snapshot.get("ships", [])
-                   if s["owner"] != 0 and s["health"] > 0]
-        if enemies:
-            args["target"] = enemies[0]
-        else:
-            return {"tool": "order_build", "args": {"type": "LightInterceptor"},
-                    "thought": "no enemy ships visible; keep building"}
-    action["args"] = args
-    return action
-
-
 # ---------------------------------------------------------------- main loop
 
 def main():
@@ -285,24 +235,22 @@ def main():
     ap.add_argument("--player", type=int, default=0)
     ap.add_argument("--llm", default="http://192.168.1.106:9931")
     ap.add_argument("--model", default=None)
-    ap.add_argument("--max-turns", type=int, default=2000)
+    ap.add_argument("--max-rounds", type=int, default=2000)
     ap.add_argument("--logfile", default="/tmp/aiplay-agent.log")
     ap.add_argument("--interval", type=float, default=4.0)
     a = ap.parse_args()
     LOGFILE = a.logfile
 
-    meta = f"player={a.player} mcp={a.mcp} llm={a.llm} max-turns={a.max_turns}"
-    session_banner(meta)
+    session_banner(f"player={a.player} mcp={a.mcp} llm={a.llm} rounds={a.max_rounds}")
     llm = LLM(a.llm, a.model)
 
-    mcp = None
-    while True:                              # wait for game + MCP to be up
+    while True:
         try:
             mcp = MCP(a.mcp)
             log("MCP sidecar: " + json.dumps(mcp.server))
             break
         except Exception as e:
-            log(f"MCP not ready ({e!r}); retrying in 5s")
+            log(f"MCP not ready ({e!r}); retry in 5s")
             time.sleep(5)
 
     for i in range(60):
@@ -316,32 +264,26 @@ def main():
     else:
         raise RuntimeError("game socket never appeared")
 
-    bind_ok = False
-    while not bind_ok:
-        bind_ok = ensure_bound(mcp, a.player)
-        if not bind_ok:
-            log("bind pending (match probably still loading); retrying in 5s")
-            time.sleep(5)
+    while not ensure_bound(mcp, a.player):
+        log("bind pending (match loading); retry in 5s")
+        time.sleep(5)
 
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    turn = 0
+    rnd = 0
     next_event_idx = 0
 
-    while turn < a.max_turns:
-        turn += 1
+    while rnd < a.max_rounds:
+        rnd += 1
         try:
-            # ---- observe --------------------------------------------------
-            snap = json.loads(
-                mcp.call("observe", {})["result"]["content"][0]["text"])
+            snap = json.loads(mcp.call("observe", {})["result"]["content"][0]["text"])
             if isinstance(snap, dict) and "result" in snap and "ships" not in snap:
                 snap = snap["result"]
             if "error" in snap:
                 log("observe error: " + snap["error"])
                 time.sleep(5)
                 continue
-
             view = compress_snapshot(snap)
-            log("[turn %d] world: %s" % (turn, world_summary(view)))
+            log("[round %d] world: %s" % (rnd, world_summary(view)))
 
             if not snap.get("matchStatus", {}).get("running", False):
                 log("match not running — waiting/rebinding")
@@ -349,59 +291,69 @@ def main():
                 ensure_bound(mcp, a.player)
                 continue
 
-            # ---- recent events as user-visible feedback --------------------
             evs = json.loads(mcp.call("get_events", {})["result"]["content"][0]["text"])
             events = evs["result"]["events"]
             fresh = events[:max(0, len(events) - next_event_idx)] if events else []
             next_event_idx = len(events)
             if fresh:
-                log("[turn %d] events: %s" % (
-                    turn, json.dumps(fresh[:4])[:240]))
+                log("[round %d] events: %s" % (rnd, json.dumps(fresh[:4])[:240]))
 
-            # ---- decide ----------------------------------------------------
             messages.append({
                 "role": "user",
-                "content": (f"Events: {json.dumps(fresh[:4])}\n"
-                            "Battlefield snapshot:\n"
-                            + json.dumps(view)
-                            + "\nYour next action (one JSON object):")})
-            reply = llm.chat(messages)
+                "content": ("Events: " + json.dumps(fresh[:4]) + "\n"
+                            "Snapshot:\n" + json.dumps(view) +
+                            "\nCommand the fleet (one tool call).")})
+
+            log("[round %d] reasoning+answer stream:" % rnd)
+            content, calls = llm.chat_stream(messages)
             messages = messages[-41:]
 
-            m = re.search(r"\{.*\}", reply, re.S)
-            action = None
-            if m:
+            if not calls:
+                log("[round %d] no tool call; nudging back to command" % rnd)
+                messages.append({"role": "assistant", "content": content or "..."})
+                messages.append({"role": "user",
+                                 "content": "Call a tool to command the fleet."})
+                time.sleep(a.interval)
+                continue
+
+            for call in calls:
+                name = call["name"]
+                if name not in TOOL_NAMES:
+                    log("[round %d] unknown tool %s" % (rnd, name))
+                    continue
                 try:
-                    action = json.loads(m.group(0))
+                    args = json.loads(call["args"] or "{}")
                 except ValueError:
-                    action = None
-            if action is None:
-                action = {"thought": reply[:120], "tool": "game_status", "args": {}}
-            log("[turn %d] thought: %s" % (turn, str(action.get("thought", ""))[:160]))
-
-            # ---- act --------------------------------------------------------
-            action = action_guard(action, snap)
-            log("[turn %d] action : %s %s" % (
-                turn, action["tool"], json.dumps(action["args"])[:150]))
-            result = result_text(mcp.call(action["tool"], action["args"]))
-            log("[turn %d] result : %s" % (turn, result))
-
-            messages.append({"role": "user",
-                             "content": "Tool result: " + result[:300]})
+                    args = {}
+                if "id" in args and not isinstance(args["id"], (int, float)):
+                    args["id"] = int(time.time()) % 100000
+                log("[round %d] tool  : %s %s" % (
+                    rnd, name, json.dumps(args)[:150]))
+                result = result_text(mcp.call(name, args))
+                log("[round %d] result: %s" % (rnd, result))
+                cid = call.get("id") or f"r{rnd}"
+                messages.append({
+                    "role": "assistant", "content": None,
+                    "tool_calls": [{"id": cid, "type": "function",
+                                    "function": {"name": name,
+                                                 "arguments": json.dumps(args)}}]})
+                messages.append({"role": "tool", "tool_call_id": cid,
+                                  "content": result[:400]})
             time.sleep(a.interval)
         except KeyboardInterrupt:
             log("agent stopped by user")
             return
         except Exception as e:
             import traceback
-            log("[turn %d] ERROR (recovering, 10s backoff): %r" % (turn, e))
+            log("[round %d] ERROR (recovering, 10s backoff): %r" % (rnd, e))
             log("trace: " + traceback.format_exc(limit=3).replace("\n", " | ")[:400])
-            if not ensure_bound(mcp, a.player):
-                time.sleep(10)
-            else:
-                time.sleep(10)
+            try:
+                ensure_bound(mcp, a.player)
+            except Exception:
+                pass
+            time.sleep(10)
 
-    log("tick/turn budget exhausted after %d turns" % turn)
+    log("round budget exhausted after %d rounds" % rnd)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,3 @@
+chris     340628   18655 94 15:22 ?        00:03:07 git -c core.autocrlf=false -c core.longpaths=true -c core.symlinks=true --git-dir /home/chris/.local/share/opencode/snapshot/bcbef52c145e891ee9c5be5993ef6facc9b9c67b/bd1dcab759b66ef8700e08ade0dcc836eb327a5a --work-tree /home/chris/Desktop/AIpornArchive/krea2-images/image2Text2Image add --all --sparse --pathspec-from-file=- --pathspec-file-nul
+chris     359756   18655  0 15:25 ?        00:00:00 git --no-optional-locks -c core.autocrlf=false -c core.fsmonitor=false -c core.longpaths=true -c core.symlinks=true -c core.quotepath=false diff --no-index --numstat -- /dev/null nudes/output/doing-my-makeup-naked-is-so-much-fun-v0-u0r2ft4q9ejd1_sd_1.png
+chris     359758  357529  0 15:25 pts/11   00:00:00 grep --color=auto git
