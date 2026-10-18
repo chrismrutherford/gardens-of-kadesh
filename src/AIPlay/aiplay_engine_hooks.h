@@ -15,6 +15,7 @@ bool32 aiplayCmdlineSave(char *string);    // /aiPlayLoad <name> handler (COF_Ne
 bool32 aiplayCmdlineSaveMP(char *string);  // /aiPlayLoadMP <name> handler (COF_NextToken)
 void aiplayEngineShutdown(void); // call inside utyGameSystemsShutdown
 void aiplayEngineSyncShips(void);// call at the end of univUpdate, before aiplayTickEnd
+void aiplayEngineDrawHUD(void);  // call each render frame (rndDrawOnScreenDebugInfo)
 
 // core hooks (see aiplay.h)
 void aiplayFramePoll(void);
