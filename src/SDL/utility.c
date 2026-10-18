@@ -1978,6 +1978,8 @@ abortloading:
     cameraJoystickReset();
 
     gameIsRunning = TRUE;
+    aiplayEngineRestart();   // AI play layer: transport must survive universe rebuilds
+
 }
 
 /*-----------------------------------------------------------------------------

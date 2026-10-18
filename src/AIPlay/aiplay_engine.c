@@ -845,6 +845,18 @@ void aiplayEngineInit(void)
 }
 
 // called from utyGameSystemsShutdown
+// universe rebuilds (mission transitions/hyperspace) run gameEnd->gameStart:
+// the transport dies with the shutdown hook and must come back here
+void aiplayEngineRestart(void)
+{
+    if (!aiplayRequested)
+    {
+        return;
+    }
+    aiplayShutdown();
+    aiplayEngineInit();
+}
+
 void aiplayEngineShutdown(void)
 {
     aiplayShutdown();

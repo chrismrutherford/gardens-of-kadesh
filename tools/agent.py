@@ -340,6 +340,7 @@ def main():
     messages = [{"role": "system", "content": messages_sys}]
     rnd = 0
     next_event_idx = 0
+    last_tick_seen = -1
 
     # nag scheduler: periodic reminders injected into the Events line,
     # including the save autosave nag (~10 min)
