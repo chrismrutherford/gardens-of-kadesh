@@ -43,6 +43,7 @@ typedef enum aiplayError
     aiplayError_badId,
     aiplayError_unaffordable,
     aiplayError_noBuilder,
+    aiplayError_noLabs,
     aiplayError_matchOver,
     aiplayError_queueFull,
     aiplayError_badRequest,

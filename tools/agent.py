@@ -204,9 +204,11 @@ Research techs (exact names for order_research tech="..."):
   ConstructionTech, HeavyGuns, ProximityDetector, SensorsArrayTech,
   GravityWellGeneratorTech, CloakGeneratorTech, RepairTech, SalvageTech
 
-Research needs ResearchShips (labs) in your fleet; if order_research is
-rejected, build ResearchShips first. If order_build is rejected with
-E_BAD_REQUEST, that hull's tech isn't researched yet — research it.
+Research needs labs = ResearchShips in your fleet (techTree.labs in the
+snapshot). If techTree.labs == 0, NO research is possible — build a
+ResearchShip first. order_research without labs returns E_NO_LABS.
+If order_build is rejected with E_BAD_REQUEST, that hull's tech isn't
+researched yet — research it (needs labs).
 
 Call ONE tool per round. The tool result plus a fresh snapshot arrive next
 round. Keep commanding the fleet; when the match is over, call game_status.

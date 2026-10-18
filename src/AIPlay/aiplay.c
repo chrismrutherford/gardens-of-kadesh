@@ -32,6 +32,7 @@ const char *aiplayErrorString(aiplayError e)
     case aiplayError_badId:        return "E_BAD_ID";
     case aiplayError_unaffordable: return "E_UNAFFORDABLE";
     case aiplayError_noBuilder:    return "E_NO_BUILDER";
+    case aiplayError_noLabs:       return "E_NO_LABS (build ResearchShips first)";
     case aiplayError_matchOver:    return "E_MATCH_OVER";
     case aiplayError_queueFull:    return "E_QUEUE_FULL";
     case aiplayError_badRequest:   return "E_BAD_REQUEST";
