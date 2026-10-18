@@ -1752,7 +1752,16 @@ sdword ccFocusCullRadiusMean(FocusCommand *selection, real32 radiusSqr, vector *
                 iMaxFocussed = iOuter;
             }
         }
-        dbgAssertOrIgnore(maxFocussed > 0);                         //one selection combo should have worked
+        if (maxFocussed == 0)
+        {   //everything culled (e.g. NaN/garbage positions in stale selections):
+            //bail gracefully; callers treat a 0 return as nothing to focus on
+            selSelectionCopy((MaxAnySelection *)selection, (MaxAnySelection *)&localSelection);
+            if (centreDest != NULL)
+            {
+                *centreDest = centre;
+            }
+            return 0;
+        }
         centre = selection->ShipPtr[iMaxFocussed]->obj.posinfo.position;//use the best selection we found
         ccFocusCullRadiusGeneral((FocusCommand *)&localSelection, selection, radiusSqr, &centre);
     }

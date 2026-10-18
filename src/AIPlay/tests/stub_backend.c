@@ -235,7 +235,7 @@ static void stTechTreeJSON(aiplayJsonBuf *out, int playerIndex)
 static const aiplayEngineBackend stubBackend = {
     sbNumPlayers, sbPlayerAlive, sbPlayerIsAI, sbResourceUnits, sbMapName,
     sbGameRunning, sbTick, sbTimeElapsed, sbIsPaused, sbSetNeutralized, sbDispatch,
-    sbShipInfo, sbSetPaused, sbStep,
+    sbShipInfo, NULL, sbSetPaused, sbStep,
     stSaveGame,
     stTraceLog,
     stTechTreeJSON,

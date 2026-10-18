@@ -161,6 +161,9 @@ typedef struct aiplayEngineBackend
     aiplayError (*dispatchOrder)(const aiplayOrderRequest *order);
     // ship/resource introspection (snapshot building; US2)
     bool     (*shipInfo)(void *shipOpaque, struct aiplayShipInfo *out);
+    // true if the id-mapped handle is still a live engine object (guards
+    // snapshot + order paths against stale ship deaths)
+    bool     (*objectLive)(void *shipOpaque);
     // time control (US4): pause/resume the simulation, step N ticks forward
     void     (*setPaused)(bool paused);
     bool     (*step)(int ticks);

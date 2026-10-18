@@ -430,8 +430,9 @@ void bobUpdateExtraCollBobInfo(LinkedList *list)
             spaceobj = blobObjects->SpaceObjPtr[i];
             // TODO(refactor, 2026-04-28): Apparently it is safe to make the following assumptions at this point.
             // Maybe get rid of unnecessary ifs below?
+            // NOTE: missiles ARE valid members of collision blobs (handled in
+            // the OBJ_MissileType cases below — mines etc); do not assert them away
             dbgAssertOrIgnore(spaceobj->staticinfo);
-            dbgAssertOrIgnore(spaceobj->header.objtype != OBJ_MissileType);
             real32 originalCollSphereSize = spaceobj->staticinfo->staticCollInfo.originalCollSphereSize;
 
             if (spaceobj->header.flags & SOF_Targetable)

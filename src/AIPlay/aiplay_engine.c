@@ -304,10 +304,48 @@ static void fillShipOrder(Ship *ship, aiplayShipInfo *out)
     }
 }
 
+// id-map entries can outlive engine objects between ticks (e.g. ship death
+// hooks missed by a transition); never dereference a stale handle
+static bool backendObjectLive(void *opaque)
+{
+    SpaceObj *obj = (SpaceObj *)opaque;
+    switch (obj->header.objtype)
+    {
+    case OBJ_ShipType:
+    {
+        for (Node *node = universe.ShipList.head; node != NULL; node = node->next)
+        {
+            if (listGetStructOfNode(node) == opaque)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    case OBJ_AsteroidType:
+    {
+        for (Node *node = universe.ResourceList.head; node != NULL; node = node->next)
+        {
+            if (listGetStructOfNode(node) == opaque)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+    default:
+        return false;
+    }
+}
+
 // backend shipInfo: fill from SpaceObj/Ship/Resource internals
 static bool backendShipInfo(void *opaque, aiplayShipInfo *out)
 {
     SpaceObj *obj = (SpaceObj *)opaque;
+    if (!backendObjectLive(opaque))
+    {
+        return false;
+    }
     memset(out, 0, sizeof(*out));
     if (obj->header.objtype != OBJ_ShipType && obj->header.objtype != OBJ_AsteroidType)
     {
@@ -481,7 +519,9 @@ static sdword resolveShips(const aiplayOrderRequest *o, Ship **ships, sdword max
     {
         void *  ship  = NULL;
         int32_t owner = -1;
-        if (!aiplayIdResolve(o->shipIds[i], &ship, &owner) || owner != aiplayBoundPlayer())
+        if (!aiplayIdResolve(o->shipIds[i], &ship, &owner) ||
+            !backendObjectLive(ship) ||
+            owner != aiplayBoundPlayer())
         {
             return -1;
         }
@@ -529,13 +569,20 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
     }
 
     // Local selection command for clWrap* (these wrappers send through the same
-    // network/command pipeline a human's click generates).
-    SelectCommand select;
-    select.numShips      = sel.numTargets;
-    select.timeLastStatus = 0.0f;
+    // network/command pipeline a human's click generates). SelectCommand has a
+    // trailing ShipPtr[1] array meant for over-allocation by the caller —
+    // a plain stack object overflows on multi-ship orders.
+    struct
+    {
+        SelectCommand cmd;
+        ShipPtr extra[AIPLAY_MAX_SHIPS_PER_ORDER];
+    } selectBuf;
+    SelectCommand *select = &selectBuf.cmd;
+    select->numShips      = sel.numTargets;
+    select->timeLastStatus = 0.0f;
     for (int i = 0; i < (int)sel.numTargets; i++)
     {
-        select.ShipPtr[i] = sel.targets[i];
+        select->ShipPtr[i] = sel.targets[i];
     }
 
     switch ((int)o->verb)
@@ -546,13 +593,13 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         to.x = o->coord[0];
         to.y = o->coord[1];
         to.z = o->coord[2];
-        clWrapMove(&universe.mainCommandLayer, &select, select.ShipPtr[0]->obj.posinfo.position, to);
+        clWrapMove(&universe.mainCommandLayer, select, select->ShipPtr[0]->obj.posinfo.position, to);
         return aiplayError_none;
     }
     case aiplayVerb_attack:
     {
         void *target = NULL;
-        if (o->targetKind != aiplayTarget_ship || !aiplayIdResolve(o->targetId, &target, NULL))
+        if (o->targetKind != aiplayTarget_ship || !aiplayIdResolve(o->targetId, &target, NULL) || !backendObjectLive(target))
         {
             return aiplayError_badId;
         }
@@ -560,13 +607,13 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         atk.numTargets       = 1;
         atk.timeLastStatus   = 0.0f;
         atk.targets[0]       = (ShipPtr)target;
-        clWrapAttack(&universe.mainCommandLayer, &select, (AttackCommand *)&atk);
+        clWrapAttack(&universe.mainCommandLayer, select, (AttackCommand *)&atk);
         return aiplayError_none;
     }
     case aiplayVerb_guard:
     {
         void *target = NULL;
-        if (o->targetKind != aiplayTarget_ship || !aiplayIdResolve(o->targetId, &target, NULL))
+        if (o->targetKind != aiplayTarget_ship || !aiplayIdResolve(o->targetId, &target, NULL) || !backendObjectLive(target))
         {
             return aiplayError_badId;
         }
@@ -574,7 +621,7 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         protect.numShips       = 1;
         protect.timeLastStatus = 0.0f;
         protect.ShipPtr[0]     = (Ship *)target;
-        clWrapProtect(&universe.mainCommandLayer, &select, &protect);
+        clWrapProtect(&universe.mainCommandLayer, select, &protect);
         return aiplayError_none;
     }
     case aiplayVerb_dock:
@@ -582,15 +629,17 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         ShipPtr dockWith = NULL;
         if (o->targetKind == aiplayTarget_ship &&
             (!aiplayIdResolve(o->targetId, (void **)&dockWith, NULL) ||
-             dockWith->shipsInsideMe == NULL))
+             !backendObjectLive(dockWith) || dockWith->shipsInsideMe == NULL))
         {
             return aiplayError_badRequest;   // target cannot dock anything
         }
-        if (o->targetKind == aiplayTarget_ship && !aiplayIdResolve(o->targetId, (void **)&dockWith, NULL))
+        if (o->targetKind == aiplayTarget_ship &&
+            (!aiplayIdResolve(o->targetId, (void **)&dockWith, NULL) ||
+             !backendObjectLive(dockWith)))
         {
             return aiplayError_badId;
         }
-        clWrapDock(&universe.mainCommandLayer, &select, DOCK_FOR_BOTHREFUELANDREPAIR, dockWith);
+        clWrapDock(&universe.mainCommandLayer, select, DOCK_FOR_BOTHREFUELANDREPAIR, dockWith);
         return aiplayError_none;
     }
     case aiplayVerb_harvest:
@@ -598,16 +647,17 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         void *target = NULL;
         if (o->targetKind != aiplayTarget_ship ||
             !aiplayIdResolve(o->targetId, &target, NULL) ||
+            !backendObjectLive(target) ||
             !aiplayIdIsResource(o->targetId))
         {
             return aiplayError_badId;   // harvest targets must be resources
         }
-        clWrapCollectResource(&universe.mainCommandLayer, &select, (ResourcePtr)target);
+        clWrapCollectResource(&universe.mainCommandLayer, select, (ResourcePtr)target);
         return aiplayError_none;
     }
     case aiplayVerb_halt:
     {
-        clWrapHalt(&universe.mainCommandLayer, &select);
+        clWrapHalt(&universe.mainCommandLayer, select);
         return aiplayError_none;
     }
     case aiplayVerb_special:
@@ -616,7 +666,7 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         if (o->targetKind == aiplayTarget_ship)
         {
             void *target = NULL;
-            if (!aiplayIdResolve(o->targetId, &target, NULL))
+            if (!aiplayIdResolve(o->targetId, &target, NULL) || !backendObjectLive(target))
             {
                 return aiplayError_badId;
             }
@@ -628,7 +678,7 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         {
             spc.numTargets = 0;
         }
-        clWrapSpecial(&universe.mainCommandLayer, &select, (SpecialCommand *)&spc);
+        clWrapSpecial(&universe.mainCommandLayer, select, (SpecialCommand *)&spc);
         return aiplayError_none;
     }
     case aiplayVerb_select:
@@ -640,7 +690,7 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
     {
         dbgMessagef("AIPLAY-BUILD: type=%s race=%d player=%d creator=%p",
                     o->name, (int)universe.players[aiplay.boundPlayer].race,
-                    aiplay.boundPlayer, (void*)select.ShipPtr[0]);
+                    aiplay.boundPlayer, (void*)select->ShipPtr[0]);
         ShipType type = shipTypeFromName(o->name);
         if (type <= ShipType_Uninitialized)
         {
@@ -663,7 +713,7 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
             }
         }
         Player *p = &universe.players[aiplay.boundPlayer];
-        ShipPtr builder = (o->numShips > 0) ? select.ShipPtr[0] : p->PlayerMothership;
+        ShipPtr builder = (o->numShips > 0) ? select->ShipPtr[0] : p->PlayerMothership;
         // same funnel the human build screen uses (clWrapDeterministicBuild):
         // keeps the UI build queue (ConsMgr cmDetermProgress) in sync with
         // AI-placed builds, and routes RUs through the shared drain code
@@ -704,13 +754,13 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         {
             return aiplayError_badRequest;
         }
-        clWrapSetTactics(&universe.mainCommandLayer, &select, want);
+        clWrapSetTactics(&universe.mainCommandLayer, select, want);
         return aiplayError_none;
     }
     case aiplayVerb_launch:
     {
         // launch docked fighters from the first dock-capable ship given
-        ShipPtr from = select.ShipPtr[0];
+        ShipPtr from = select->ShipPtr[0];
         if (from == NULL || from->shipsInsideMe == NULL)
         {
             return aiplayError_badRequest;
@@ -739,7 +789,7 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
     }
     case aiplayVerb_scuttle:
     {
-        clWrapScuttle(&universe.mainCommandLayer, &select);
+        clWrapScuttle(&universe.mainCommandLayer, select);
         return aiplayError_none;
     }
     case aiplayVerb_formation:
@@ -749,7 +799,7 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         {
             return aiplayError_badRequest;
         }
-        clWrapFormation(&universe.mainCommandLayer, &select, f);
+        clWrapFormation(&universe.mainCommandLayer, select, f);
         return aiplayError_none;
     }
     }
@@ -845,6 +895,7 @@ static const aiplayEngineBackend engineBackend = {
     backendSetPlayerNeutralized,
     backendDispatchOrder,
     backendShipInfo,
+    backendObjectLive,
     backendSetPaused,
     backendStep,
     backendBuildQueueJSON,
