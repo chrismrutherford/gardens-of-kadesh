@@ -575,6 +575,8 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
 
 // --------------------------------------------------------------- backend table
 
+static bool backendSaveGame(const char *name);
+
 static const aiplayEngineBackend engineBackend = {
     backendNumPlayers,
     backendPlayerAlive,
@@ -592,6 +594,7 @@ static const aiplayEngineBackend engineBackend = {
     backendStep,
     backendBuildQueueJSON,
     backendResearchJSON,
+    backendSaveGame,      // defined below (GamePick.c plumbing)
 };
 
 const aiplayEngineBackend *aiplayEngineBackendGet(void)
@@ -602,6 +605,18 @@ const aiplayEngineBackend *aiplayEngineBackendGet(void)
 // called from utyGameSystemsInit (src/SDL/utility.c) once systems are up
 extern bool32 enableAVI;    // src/SDL/main.c (movies/animatics master switch)
 extern bool32 nisEnabled;   // src/Game/NIS.c (scripted in-engine cinematics)
+
+static bool backendSaveGame(const char *name)
+{
+    // reuse the front-end's SaveGame plumbing (pause-safe, MP/SP aware)
+    extern void gpSaveGivenGame(char *gamename);      // src/Game/GamePick.c
+    static char path[512];
+    strcpy(path, aiplayAutoSaveIsMP ? "SavedGames\\MultiPlayer\\ai-"
+                                    : "SavedGames\\SinglePlayer\\ai-");
+    strcat(path, name);
+    gpSaveGivenGame(path);
+    return true;
+}
 
 void aiplayEngineInit(void)
 {

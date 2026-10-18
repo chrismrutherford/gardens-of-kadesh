@@ -162,6 +162,8 @@ typedef struct aiplayEngineBackend
     // build queue + research serialization (FR-001 completeness)
     void     (*buildQueueJSON)(struct aiplayJsonBuf *out, int playerIndex);
     void     (*researchJSON)(struct aiplayJsonBuf *out, int playerIndex);
+    // save the current match to a named savegame (agent T040 convenience)
+    bool     (*saveGame)(const char *name);
 } aiplayEngineBackend;
 
 typedef struct aiplayShipInfo

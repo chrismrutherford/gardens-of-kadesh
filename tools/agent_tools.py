@@ -102,6 +102,11 @@ TOOLS = [
         "description": "Resume the simulation",
         "parameters": {"type": "object", "properties": {}}}},
     {"type": "function", "function": {
+        "name": "save_game",
+        "description": "Save the match to a named savegame (call when nagged)",
+        "parameters": {"type": "object", "properties": {
+            "name": {"type": "string", "description": "savegame name, e.g. autosave-tickXXXX"}}}}},
+    {"type": "function", "function": {
         "name": "step",
         "description": "Advance N ticks while paused",
         "parameters": {"type": "object", "properties": {

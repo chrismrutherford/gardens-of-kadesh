@@ -595,6 +595,42 @@ void aiplayHandleLine(const char *line, aiplayJsonBuf *out)
         aiplayOrderSubmitJson(&doc, params, method + 6, idRaw, out);
         return;
     }
+    if (strcmp(method, "game.save") == 0)
+    {
+        if (backend == NULL || backend->saveGame == NULL)
+        {
+            aiplayRespError(out, idRaw, "E_BAD_REQUEST", "saving not supported");
+            return;
+        }
+        char name[64];
+        bool haveName = params >= 0 &&
+            aiplayJsonGetString(&doc, params, "name", name, sizeof(name));
+        if (!haveName || name[0] == '\0')
+        {
+            snprintf(name, sizeof(name), "aiplay-autosave-%d", (int)aiplay.lastTick);
+        }
+        for (char *p = name; *p; p++)
+        {   // filenames: restrict to safe characters
+            if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                  (*p >= '0' && *p <= '9') || *p == '-' || *p == '_' || *p == ' '))
+            {
+                *p = '-';
+            }
+        }
+        bool ok = backend->saveGame(name);
+        if (!ok)
+        {
+            aiplayRespError(out, idRaw, "E_INTERNAL", "SaveGame failed");
+            return;
+        }
+        aiplayRespOpen(out, idRaw);
+        aiplayJsonBufAddStr(out, "{");
+        aiplayJsonString(out, "saved", name);
+        aiplayJsonTrimComma(out);
+        aiplayJsonBufAddStr(out, "}");     // close result object
+        aiplayRespClose(out);
+        return;
+    }
     if (strcmp(method, "time.pause") == 0)
     {
         aiplaySetPaused(true);

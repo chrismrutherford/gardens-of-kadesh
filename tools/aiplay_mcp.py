@@ -38,6 +38,8 @@ TOOLS = [
     ("pause",         "Pause the simulation", {}),
     ("resume",        "Resume the simulation", {}),
     ("step",          "Advance N ticks while paused", {"ticks": {"type": "integer"}}),
+    ("save_game",     "Save the match (autosave every ~10 minutes)",
+     {"name": {"type": "string", "description": "savegame name (max 64 chars safe chars)"}}),
 ]
 
 VERB_FOR_TOOL = {
@@ -51,6 +53,7 @@ METHOD_FOR_TOOL = {
     "bind_session": "aiSession.bind", "game_status": "aiSession.status",
     "observe": "state.snapshot", "get_events": "state.events",
     "pause": "time.pause", "resume": "time.resume", "step": "time.step",
+    "save_game": "game.save",
 }
 
 

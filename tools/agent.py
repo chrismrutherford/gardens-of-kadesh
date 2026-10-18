@@ -272,6 +272,21 @@ def main():
     rnd = 0
     next_event_idx = 0
 
+    # nag scheduler: periodic reminders injected into the Events line,
+    # including the save autosave nag (~10 min)
+    nags = [
+        {"every": 600, "last": 0, "msg":
+         "SAVE NAG: it has been ~10 minutes since the last save. Call save_game "
+         "with a fresh name like 'autosave-tick-<tick>' this round."},
+        {"every": 300, "last": 0, "msg":
+         "ECONOMY NAG: review RU income — make sure 2+ ResourceCollectors are "
+         "harvesting and one more is queued if income is low."},
+        {"every": 480, "last": 0, "msg":
+         "FLEET NAG: review the fleet — if you out-number the enemy 2:1, focus "
+         "attacks on ONE enemy ship; if losing, retreat fighters to guard the Mothership."},
+    ]
+    last_save_action = None
+
     while rnd < a.max_rounds:
         rnd += 1
         try:
@@ -291,6 +306,18 @@ def main():
                 ensure_bound(mcp, a.player)
                 continue
 
+            # pick due nags
+            now = time.time()
+            due = [n["msg"] for n in nags if now - n["last"] >= n["every"]]
+            for n in nags:
+                if now - n["last"] >= n["every"]:
+                    n["last"] = now
+            for n in due:
+                log("[round %d] NAG: %s" % (rnd, n.split(':')[0]))
+            # remember when the agent last ordered a save
+            save_action = None
+            # (save detection happens post-action; see below)
+
             evs = json.loads(mcp.call("get_events", {})["result"]["content"][0]["text"])
             events = evs["result"]["events"]
             fresh = events[:max(0, len(events) - next_event_idx)] if events else []
@@ -298,9 +325,11 @@ def main():
             if fresh:
                 log("[round %d] events: %s" % (rnd, json.dumps(fresh[:4])[:240]))
 
+            nagline = "\n".join(due) if due else ""
             messages.append({
                 "role": "user",
                 "content": ("Events: " + json.dumps(fresh[:4]) + "\n"
+                            + nagline + "\n"
                             "Snapshot:\n" + json.dumps(view) +
                             "\nCommand the fleet (one tool call).")})
 
@@ -329,6 +358,8 @@ def main():
                     args["id"] = int(time.time()) % 100000
                 log("[round %d] tool  : %s %s" % (
                     rnd, name, json.dumps(args)[:150]))
+                if name == "save_game":
+                    nags[0]["last"] = time.time()   # save nag satisfied
                 result = result_text(mcp.call(name, args))
                 log("[round %d] result: %s" % (rnd, result))
                 cid = call.get("id") or f"r{rnd}"
