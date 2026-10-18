@@ -180,8 +180,38 @@ Your resources (RU) pay for ships. ResourceCollectors harvest asteroids for RU,
 the Mothership builds ships, interceptors/corvettes fight. Builds take time —
 check buildQueue before ordering more builds.
 
+Fleet roster you can build (order_build type="..."), with research
+prerequisites (research first via order_research tech="..."):
+
+  Always available (no tech): ResourceCollector, ResourceController,
+      LightInterceptor, Probe, ProximitySensor, SensorArray
+  requires HeavyGuns:      HeavyDefender, HeavyCorvette
+  requires Chassis2:       AttackBomber, MultiGunCorvette, MinelayerCorvette
+  requires Chassis2 + MassDrive10Kt:   StandardFrigate
+  requires Chassis3:       DDDFrigate, GravWellGenerator
+  requires CloakGeneratorTech:  CloakGenerator
+  requires IonWeapons:     IonCannonFrigate
+  requires Chassis3 + MassDrive100Kt:  MissileDestroyer, StandardDestroyer
+  requires HeavyGuns + Chassis3:       HeavyCruiser
+  RepairTech / SalvageTech enable RepairCorvette / SalCapCorvette support use
+
+Research techs (exact names for order_research tech="..."):
+  NewAlloys, MassDrive1Kt, CoolingSystems, CloakDefenseFighter,
+  TargetingSystems, PlasmaWeapons, Chassis1, MassDrive10Kt, MediumGuns,
+  MineLayerTech, Chassis2, AdvancedCoolingSystems, MassDrive100Kt,
+  FireControl, SupportRefuelTech, AdvanceTacticalSupport, IonWeapons,
+  DDDFDFGFTech, Chassis3, MassDrive1Mt, AdvancedFireControl, MissileWeapons,
+  ConstructionTech, HeavyGuns, ProximityDetector, SensorsArrayTech,
+  GravityWellGeneratorTech, CloakGeneratorTech, RepairTech, SalvageTech
+
+Research needs ResearchShips (labs) in your fleet; if order_research is
+rejected, build ResearchShips first. If order_build is rejected with
+E_BAD_REQUEST, that hull's tech isn't researched yet — research it.
+
 Call ONE tool per round. The tool result plus a fresh snapshot arrive next
 round. Keep commanding the fleet; when the match is over, call game_status.
+
+Win condition: destroy every enemy ship (their Mothership is the anchor).
 
 Strategy:
 1. Keep 2+ ResourceCollectors harvesting (order_harvest nearest asteroid).
