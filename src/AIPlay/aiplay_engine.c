@@ -611,11 +611,14 @@ static bool backendSaveGame(const char *name)
     // reuse the front-end's SaveGame plumbing (pause-safe, MP/SP aware)
     extern void gpSaveGivenGame(char *gamename);      // src/Game/GamePick.c
     static char path[512];
-    strcpy(path, aiplayAutoSaveIsMP ? "SavedGames\\MultiPlayer\\ai-"
-                                    : "SavedGames\\SinglePlayer\\ai-");
+    strcpy(path, aiplayAutoSaveIsMP ? "SavedGames/MultiPlayer/ai-"
+                                    : "SavedGames/SinglePlayer/ai-");
     strcat(path, name);
-    gpSaveGivenGame(path);
-    return true;
+    dbgMessagef("AIPLAY-SAVE: calling gpSaveGivenGame('%s')", path);
+    extern bool32 SaveGame(char *filename);
+    bool32 direct = SaveGame(path);   // diagnostic: direct call, no FE plumbing
+    dbgMessagef("AIPLAY-SAVE: SaveGame returned %d", direct);
+    return direct != FALSE;
 }
 
 void aiplayEngineInit(void)
