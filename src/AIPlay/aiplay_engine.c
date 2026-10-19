@@ -292,6 +292,12 @@ static void fillShipOrder(Ship *ship, aiplayShipInfo *out)
             out->orderVerb = "order?";
             break;
         }
+        if ((todo->ordertype.attributes & COMMAND_MASK_PROTECTING) &&
+            (out->orderVerb == NULL || strcmp(out->orderVerb, "move") == 0))
+        {   // guard is a protecting move: surface it as "guard" so the
+            // agents can dedupe it instead of seeing an opaque move/order?
+            out->orderVerb = "guard";
+        }
         if ((todo->ordertype.attributes & COMMAND_MASK_PASSIVE_ATTACKING) &&
             out->orderVerb == NULL)
         {

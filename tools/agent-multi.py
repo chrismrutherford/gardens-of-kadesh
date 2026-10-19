@@ -8,6 +8,7 @@ The commander owns the session binding and all orders; peers publish
 JSON artifacts that are merged into the commander's round prompts.
 """
 import argparse
+import json
 import os
 import sys
 import threading
@@ -22,20 +23,47 @@ DEFAULT_HOST = "http://192.168.2.72"
 
 def parse_args():
     ap = argparse.ArgumentParser(description="Homeworld multi-agent fleet")
-    ap.add_argument("--llm-strategist", default=DEFAULT_HOST + ":9931")
-    ap.add_argument("--llm-analyst", default=DEFAULT_HOST + ":9932")
-    ap.add_argument("--llm-economist", default=DEFAULT_HOST + ":9933")
-    ap.add_argument("--llm-critic", default=DEFAULT_HOST + ":9934")
+    ap.add_argument("--config", default=os.path.join(os.path.dirname(__file__),
+                                                     "agent-multi.json"),
+                    help="JSON config file (commander/peers endpoints)")
+    ap.add_argument("--llm-commander", default=None,
+                    help="fast executor model for the command loop")
+    ap.add_argument("--llm-strategist", default=None)
+    ap.add_argument("--llm-analyst", default=None)
+    ap.add_argument("--llm-economist", default=None)
+    ap.add_argument("--llm-critic", default=None)
     ap.add_argument("--mcp", default="http://127.0.0.1:8302/mcp")
     ap.add_argument("--player", type=int, default=0)
-    ap.add_argument("--interval", type=float, default=4.0)
+    ap.add_argument("--interval", type=float, default=None)
     ap.add_argument("--max-rounds", type=int, default=2000)
     ap.add_argument("--stale-secs", type=float,
                     default=agent_multi.STALE_DEFAULT_SECS)
     ap.add_argument("--session-id", default=None)
     ap.add_argument("--logfile", default=agent.__dict__.get("logfile_default",
                                                             "/tmp/aiplay-agent.log"))
-    return ap.parse_args()
+    a = ap.parse_args()
+
+    # config file fallback: any not-explicitly-given endpoint comes from JSON
+    cfg = {}
+    try:
+        with open(a.config) as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        pass
+    if not a.llm_commander:
+        a.llm_commander = cfg.get("commander") or DEFAULT_HOST + ":9930"
+    peers_cfg = cfg.get("peers", {})
+    a.llm_strategist = a.llm_strategist or peers_cfg.get("strategist") \
+        or cfg.get("strategist") or DEFAULT_HOST + ":9931"
+    a.llm_analyst = a.llm_analyst or cfg.get("analyst") \
+        or peers_cfg.get("analyst") or DEFAULT_HOST + ":9932"
+    a.llm_economist = a.llm_economist or cfg.get("economist") \
+        or peers_cfg.get("economist") or DEFAULT_HOST + ":9933"
+    a.llm_critic = a.llm_critic or cfg.get("critic") \
+        or peers_cfg.get("critic")   # critic optional (config may null it)
+    if a.interval is None:
+        a.interval = cfg.get("interval", 1.0)
+    return a
 
 
 PROMPTS = {
@@ -77,6 +105,8 @@ def main():
                       ("analyst", a.llm_analyst),
                       ("economist", a.llm_economist),
                       ("critic", a.llm_critic)):
+        if not url:
+            continue            # optional role (e.g. critic) disabled in config
         try:
             llm = agent.LLM(url)
         except Exception as exc:
@@ -105,11 +135,22 @@ def main():
 
     # commander runs in the main thread (same cadence as agent.py) until done
     try:
-        import os
         os.environ["AIPLAY_MULTI_DIR"] = logdir
-        agent.main()
+        os.environ["AIPLAY_MULTI_PROMPT"] = "executor"
+        agent.LOGFILE = a.logfile
+        # agent.main parses argv: inject the executor's LLM + fast interval
+        argv_backup = sys.argv[1:]
+        sys.argv[1:] = ["--mcp", a.mcp, "--player", str(a.player),
+                        "--llm", a.llm_commander,
+                        "--interval", str(a.interval),
+                        "--max-rounds", str(a.max_rounds),
+                        "--logfile", a.logfile]
+        try:
+            agent.main()
+        finally:
+            sys.argv[1:] = argv_backup
     finally:
-        os.environ.pop("AIPLAY_MULTI_DIR", None)
+        os.environ.pop("AIPLAY_MULTI_PROMPT", None)
         for p in peers:
             p.stop()
         for p in peers:

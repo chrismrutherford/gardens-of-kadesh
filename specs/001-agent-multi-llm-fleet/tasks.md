@@ -37,6 +37,14 @@
       artifact-merge appears in next round prompt; stale artifacts excluded
       (US1 acceptances 1–3) in tools/tests/test_agent_multi.py
 
+## Phase 3b: US6 4B executor drives the command loop (P1)
+
+- [ ] T022 [P] [US6] Executor prompt + --llm-commander flag (default 4B
+      endpoint) in tools/agent-multi.py; commander-sidecar bind unchanged
+- [ ] T023 [US6] Tests: empty build queue → order_build next round; null
+      order → move/attack/harvest issued; research gap → order_research or
+      ResearchShip build (US6 acceptances 1-3; FR-012/013 audit prompt)
+
 ## Phase 4: US2 Peer agents work flat out (P1)
 
 - [ ] T010 [P] [US2] Strategist + Economist role prompts and loops

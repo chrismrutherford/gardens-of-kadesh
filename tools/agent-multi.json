@@ -1,0 +1,13 @@
+{
+  "commander": "http://192.168.1.106:9931",
+  "peers": {
+    "strategist": "http://192.168.2.72:9931",
+    "analyst": "http://192.168.2.72:9932",
+    "economist": "http://192.168.2.72:9933"
+  },
+  "critic": "http://192.168.2.72:9934",
+  "mcp": "http://127.0.0.1:8302/mcp",
+  "player": 0,
+  "interval": 1.0,
+  "staleSecs": 60
+}

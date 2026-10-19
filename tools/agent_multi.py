@@ -115,6 +115,7 @@ def _slurp(path):
 def append_order_ring(store, orders, entry, keep=20):
     """Update the commander's orders.json ring (latest `keep` entries)."""
     orders.append(entry)
+    orders[:] = orders[-keep:]
     store.write_raw("orders",
                     {"role": "commander", "orders": orders[-keep:]})
 
@@ -201,10 +202,13 @@ class PeerLoop(threading.Thread):
     def _context(self, snap, running):
         view = agent.compress_snapshot(snap)
         if not self.full_snapshot:
-            view = agent.world_summary(view)
+            summary = agent.world_summary(view)
+        else:
+            summary = json.dumps(view)
         parts = [
             self.prompt,
             "tick=%s running=%s" % (view.get("tick"), running),
+            summary,
         ]
         if self.use_events:
             parts.append("events=" + json.dumps(self._events()[-4:]))
@@ -229,46 +233,47 @@ class PeerLoop(threading.Thread):
 
     # -- main loop -------------------------------------------------------
 
+    def step_once(self):
+        """One advisory round: observe → reason → publish. Raises on error."""
+        snap = self._observe()
+        if snap is None:
+            raise agent.MCPFailure("observe failed")
+        running = snap.get("matchStatus", {}).get("running", False)
+        tick = snap.get("tick") or snap.get("matchStatus", {}).get("tick", 0)
+        if tick < self.tick_seen:
+            self.history = []           # reset rebase (FR-007), before use
+        if running is False:
+            self.store.write(self.role, self.role, tick,
+                             "match over — peer idle",
+                             {"directives": []})
+            return "idle"
+        ctx = self._context(snap, running)
+        reply = self.llm.chat(ctx, expect_tools=False, max_tokens=4000)
+        if self.has_tool_call(reply):
+            self.logger.log("discarded tool-call reply (FR-010)")
+        elif reply.strip():
+            self.history.append(reply[:120])
+            self.history = self.history[-3:]
+        summary, payload = _peer_payload(reply)
+        self.store.write(self.role, self.role, tick, summary, payload)
+        self.logger.server_rounds += 1
+        self.tick_seen = max(self.tick_seen, tick)
+        self.logger.log("peer round %d published: %s" % (self.round,
+                                                         summary))
+        return summary
+
     def run(self):
         backoff = 1.0
         while not self.stop_flag.is_set():
             self.round += 1
             try:
-                snap = self._observe()
-                if snap is None:
-                    time.sleep(5)
-                    continue
-                running = snap.get("matchStatus", {}).get("running", False)
-                tick = snap.get("matchStatus", {}).get("tick", 0)
-                if running is False:
-                    self.store.write(
-                        self.role, self.role, tick,
-                        "match over — peer idle",
-                        {"directives": [], "payload_notes": "idle"})
-                    time.sleep(30)
-                    continue
-                self.logger.log("peer round %d beginning" % self.round)
-                ctx = self._context(snap, running)
-                reply = self.llm.chat(ctx, expect_tools=False)
-                if self.has_tool_call(reply):
-                    self.logger.log("discarded tool-call reply (FR-010)")
-                else:
-                    self.history.append(reply[:120])
-                    self.history = self.history[-3:]
-                summary, payload = _peer_payload(reply)
-                self.store.write(self.role, self.role, tick,
-                                 summary, payload)
-                self.logger.server_rounds += 1
-                if tick < self.tick_seen:
-                    self.history = []       # reset rebase (FR-007)
-                self.tick_seen = max(self.tick_seen, tick)
-                self.logger.log("peer round %d published: %s"
-                                % (self.round, summary))
-                self.logger.perf()
+                self.step_once()
                 backoff = 1.0       # healthy: continue back-to-back
             except Exception as exc:
                 self.logger.log("peer round %d error (backoff %.0fs): %r"
                                 % (self.round, backoff, exc))
+                if isinstance(exc, SidecarReadOnlyError):
+                    pass    # peer violation logged; still never mutates
                 time.sleep(backoff)
                 backoff = min(backoff * 2, 30.0)
 
@@ -295,16 +300,25 @@ def merge_artifacts(store, stale_secs=STALE_DEFAULT_SECS, now_fn=now):
         art = store.read_fresh(role, stale_secs, now_fn)
         if art is None:
             continue
-        line = ("%s[%s, tick %s] %s"
-                % (role, "STALE" if art.get("stale") else "fresh",
-                   art.get("tick"), art.get("summary", "")))
         if art.get("stale"):
-            stale.append(line)
+            stale.append("%s[stale, tick %s]"
+                         % (role, art.get("tick")))
             continue
         if budget <= 0:
             break
-        fresh.append(line[:budget])
-        budget -= len(line)
+        lines = ["%s[fresh, tick %s]: %s"
+                 % (role, art.get("tick"), art.get("summary", ""))]
+        payload = art.get("payload") or {}
+        for key in ("directives", "reactions", "advice", "buildQueue"):
+            vals = payload.get(key)
+            if vals:
+                lines.append("  %s: %s" % (key, json.dumps(vals)[:400]))
+        for ob in payload.get("objections", [])[:3]:
+            lines.append("  OBJECTION order %s: %s"
+                         % (ob.get("orderId"), ob.get("reason", "")))
+        text = "\n".join(lines)[:budget + 200]
+        fresh.append(text[:budget])
+        budget -= len(text)
     return fresh, stale
 
 

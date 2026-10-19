@@ -114,7 +114,8 @@ class LLM:
             headers={"Content-Type": "application/json"})
         with urllib.request.urlopen(req, timeout=600) as r:
             data = json.loads(r.read())
-        return data["choices"][0]["message"].get("content") or ""
+        msg = data["choices"][0]["message"]
+        return msg.get("content") or msg.get("reasoning_content") or ""
 
     def chat_stream(self, messages):
         """Consume the SSE stream; log deltas live; return (content, calls)."""
@@ -199,6 +200,20 @@ def ensure_bound(mcp, player):
 
 
 # ---------------------------------------------------------------- prompting
+
+EXECUTOR_PROMPT = """You are the EXECUTOR: a fast fleet-control model for a
+Homeworld-style RTS. Big-model advisors publish directives (see Peer
+directives). Your job is mechanical enforcement, every round, in this order:
+1. PRODUCTION: any ship the directives' production plan needs but the
+   buildQueue lacks -> order_build it now (respect research prerequisites).
+2. NO IDLE SHIPS: any ship with order null in the snapshot -> task it this
+   round: harvest with ResourceCollectors, attack with warships (use dps/
+   range), guard Mothership otherwise.
+3. RESEARCH: any tech on the research path not listed researching, and
+   labs free -> order_research now (E_NO_LABS -> build ResearchShip first).
+Issue exactly one tool call per round: the topmost gap not yet fixed.
+When all gaps are clear, follow the newest big-model directive (one tool
+call). Keep replies short; skip long reasoning."""
 
 SYSTEM_PROMPT = """You are the fleet commander AI for a Homeworld (1999-style) RTS game,
 playing one side of a real-time skirmish while a human spectates the live game window.
@@ -365,6 +380,36 @@ def merge_orders_ring(name, args, result_text_snippet, tick):
         pass
 
 
+def ships_already_executing(args, verb, snap):
+    """True if every requested ship's CURRENT order matches the request."""
+    ships = (args.get("ships") or []) if isinstance(args, dict) else []
+    if not ships:
+        return False
+    cur = {s.get("id"): (s.get("order") or {})
+           for s in snap.get("ships", [])}
+    tgt = args.get("target")
+    for sid in ships:
+        o = cur.get(sid)
+        if not isinstance(o, dict):
+            return False          # idle/unknown: let the order through
+        v = o.get("verb")
+        t = o.get("targetId", o.get("target"))
+        if v != verb:
+            return False
+        if tgt is not None and t is not None:
+            if isinstance(t, list) and isinstance(tgt, list):
+                if [round(x, 0) for x in t] != [round(x, 0) for x in tgt]:
+                    return False
+            elif t != tgt:
+                return False
+    return True
+
+
+TOOL_VERB = {"order_move": "move", "order_attack": "attack",
+             "order_guard": "guard", "order_dock": "dock",
+             "order_harvest": "harvest", "order_special": "special"}
+
+
 def main():
 
     global LOGFILE
@@ -378,6 +423,9 @@ def main():
     ap.add_argument("--interval", type=float, default=4.0)
     a = ap.parse_args()
     LOGFILE = a.logfile
+    import os as _os
+    prompt_key = _os.environ.get("AIPLAY_MULTI_PROMPT")  # "executor" override
+    base_prompt = EXECUTOR_PROMPT if prompt_key == "executor" else SYSTEM_PROMPT
 
     session_banner(f"player={a.player} mcp={a.mcp} llm={a.llm} rounds={a.max_rounds}")
     # load the playbook (build costs + research chains extracted from game data)
@@ -386,7 +434,7 @@ def main():
         pb = open(__file__.rsplit("/", 1)[0] + "/../documentation/community/ai-playbook.md").read()
     except OSError:
         pass  # stay lean if missing
-    messages_sys = SYSTEM_PROMPT + ("\n\n=== PLAYBOOK (authoritative game data) ===\n" + pb) if pb else SYSTEM_PROMPT
+    messages_sys = base_prompt + ("\n\n=== PLAYBOOK (authoritative game data) ===\n" + pb) if pb else base_prompt
     llm = LLM(a.llm, a.model)
 
     while True:
@@ -515,6 +563,16 @@ def main():
                 except ValueError:
                     args = {}
                 args = guard_call(name, args, snap)
+                key = (name, tuple(sorted(args.get("ships", []) or [])) if name != "order_harvest" else (args.get("ships") or [None])[0],
+                       args.get("target"), args.get("dockWith"),
+                       args.get("tech"), args.get("type"))
+                verb = TOOL_VERB.get(name)
+                if not fresh and verb and ships_already_executing(args, verb, snap):
+                    # authoritative dedupe: the snapshot shows the requested
+                    # ships already executing this exact order
+                    log("[round %d] order already executing (%s on %r)"
+                        % (rnd, verb, args.get("ships")))
+                    break
                 log("[round %d] tool  : %s %s" % (
                     rnd, name, json.dumps(args)[:150]))
                 if name == "save_game":

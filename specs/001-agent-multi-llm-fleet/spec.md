@@ -145,6 +145,37 @@ role/endpoint flags; after launch, per-role log files appear under
 
 ---
 
+### User Story 6 - 4B executor drives the command loop (Priority: P1)
+
+The commander is a small, fast LLM (default a 4B endpoint) running an
+executor prompt that mechanically enforces three invariants every round:
+(1) any build the plan needs IS in progress, (2) every ship is tasked —
+no idle hulls, (3) any research the plan needs IS in progress. It executes
+the directives the big-model peers publish, at 1-2 s cadence.
+
+**Why this priority**: turns big-model advice into fast, always-on command
+throughput; big-model latency no longer gates the match.
+
+**Independent Test**: point the commander at a fast small model with the
+peers offline — the three-invariant audit still runs every round
+(snapshot + buildQueue + techTree are self-sufficient).
+
+**Acceptance Scenarios**:
+
+1. **Given** an empty build queue while the production plan requests
+   units, **When** the executor's next round runs, **Then** an
+   `order_build` is issued within one round.
+2. **Given** a ship with `"order": null` in the snapshot, **When** the
+   executor's next round runs, **Then** the idle ship receives move/
+   attack/harvest within one round.
+3. **Given** free research slots and a research path directive, **When**
+   the executor audits, **Then** missing research is started within one
+   round (or E_NO_LABS handled by building a ResearchShip).
+
+---
+
+---
+
 ### Edge Cases
 
 - What happens when two peers publish contradictory advice? The commander's
@@ -191,6 +222,15 @@ role/endpoint flags; after launch, per-role log files appear under
   from the existing agent loop (epoch-named saves, ~10 min cadence).
 - **FR-010**: When a peer LLM returns a tool call despite being read-only,
   the peer MUST discard it and log the violation (defense in depth).
+- **FR-011**: The commander endpoint MUST be overridable (`--llm-commander`)
+  and default to the user's 4B endpoint; it keeps sole binding + orders.
+- **FR-012**: The commander's executor prompt MUST instruct a mechanical
+  audit each round: builds in the production plan must be `building` in
+  the snapshot; every ship must have a non-`null` order; research on the
+  plan path must be `researching` — gaps become tool calls this round.
+- **FR-013**: Peer directives MUST be advisory to the executor (it fills
+  audit gaps mechanically; conflicts resolve in favor of invariant safety:
+  economy + defense before offense).
 
 ### Key Entities *(include if feature involves data)*
 
@@ -221,6 +261,9 @@ role/endpoint flags; after launch, per-role log files appear under
 - **SC-005**: Survivability: kill any one peer server for 2 min — the
   commander issues orders continuously throughout; the peer catches up on
   restore without manual intervention.
+- **SC-006**: The executor (4B commander) sustains ≥ 1 decision round per
+  2 s while peers run flat out; zero idle ships by audit in ≥ 90% of
+  rounds on an active match.
 
 ## Assumptions
 
