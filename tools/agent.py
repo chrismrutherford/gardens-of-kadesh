@@ -72,6 +72,10 @@ def http_json(url, payload=None, timeout=60):
 
 # ---------------------------------------------------------------- LLM (SSE)
 
+class MCPFailure(RuntimeError):
+    pass
+
+
 class LLM:
     """Streaming chat with native tool calling + reasoning (llama.cpp/Qwen3)."""
 
@@ -85,6 +89,32 @@ class LLM:
                 raise RuntimeError("LLM exposes no models: " + self.base)
             self.model = models[0]["model"].split("/")[-1]
         log(f"LLM: {self.base} model={self.model} (streaming + native tools)")
+
+    def chat(self, prompt, expect_tools=True, max_tokens=1400):
+        """One-shot non-streaming completion for peer loops (no tools)."""
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "system",
+                 "content": "You are a read-only advisor. Reply with advice "
+                            "text only; you cannot execute orders."},
+                {"role": "user", "content": prompt[:12000]},
+            ],
+            "temperature": self.temperature,
+            "max_tokens": max_tokens,
+        }
+        if not expect_tools:
+            payload["chat_template_kwargs"] = {"enable_thinking": True}
+        else:
+            payload["tools"] = TOOLS
+            payload["stream"] = True
+        req = urllib.request.Request(
+            self.base + "/v1/chat/completions",
+            data=json.dumps(payload).encode(),
+            headers={"Content-Type": "application/json"})
+        with urllib.request.urlopen(req, timeout=600) as r:
+            data = json.loads(r.read())
+        return data["choices"][0]["message"].get("content") or ""
 
     def chat_stream(self, messages):
         """Consume the SSE stream; log deltas live; return (content, calls)."""
@@ -294,6 +324,47 @@ def guard_call(name, args, snapshot):
     return args
 
 
+def merge_peer_artifacts():
+    """agent-multi hook: fresh peer directives for this round (no LLM I/O)."""
+    import os as _os
+    import agent_multi as _am
+    d = _os.environ.get("AIPLAY_MULTI_DIR")
+    if not d:
+        return ""
+    try:
+        fresh, stale = _am.merge_artifacts(_am.ArtifactStore(d))
+    except Exception:
+        return ""
+    out = ""
+    if fresh:
+        out += "Peer directives (advisory, freshest first):\n" + \
+            "\n".join(fresh) + "\n"
+    if stale:
+        out += "(stale peers ignored: " + "; ".join(stale[:3]) + ")\n"
+    return out
+
+
+def merge_orders_ring(name, args, result_text_snippet, tick):
+    """agent-multi hook: record issued orders for the critic peer."""
+    import os as _os
+    d = _os.environ.get("AIPLAY_MULTI_DIR")
+    if not d:
+        return
+    try:
+        import agent_multi as _am
+        store = _am.ArtifactStore(d)
+        try:
+            ring = store.read("orders").get("orders", [])
+        except (OSError, ValueError):
+            ring = []
+        _am.append_order_ring(store, ring,
+                              {"tool": name, "args": args,
+                               "result": result_text_snippet[:80],
+                               "tick": tick})
+    except Exception:
+        pass
+
+
 def main():
 
     global LOGFILE
@@ -413,10 +484,12 @@ def main():
                 log("[round %d] events: %s" % (rnd, json.dumps(fresh[:4])[:240]))
 
             nagline = "\n".join(due) if due else ""
+            peerline = merge_peer_artifacts()
             messages.append({
                 "role": "user",
                 "content": ("Events: " + json.dumps(fresh[:4]) + "\n"
                             + nagline + "\n"
+                            + peerline +
                             "Snapshot:\n" + json.dumps(view) +
                             "\nCommand the fleet (one tool call).")})
 
@@ -449,6 +522,7 @@ def main():
                     nags[0]["last"] = time.time()
                     log("[round %d] save nag satisfied" % rnd)
                 result = result_text(mcp.call(name, args))
+                merge_orders_ring(name, args, result, view.get("tick", 0))
                 log("[round %d] result: %s" % (rnd, result))
                 cid = call.get("id") or f"r{rnd}"
                 messages.append({

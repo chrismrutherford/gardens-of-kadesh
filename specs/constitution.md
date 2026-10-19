@@ -36,6 +36,16 @@ issue commands (observe, query, order). Do not build replays of features
 (tournaments, ML training loops, UI) until a spec demands them. Every added
 capability MUST map to a verifiable spec criterion.
 
+### VI. Single Command Binding (multi-agent systems)
+When multiple AI processes interact with a running match, exactly ONE process
+(the commander) MUST own a session binding and issue order commands. Peer
+agents (strategist, analyst, critic, etc.) MUST be read-only observers that
+publish advice to shared state and MUST NOT race for bindings or queue orders.
+Rationale: the engine's UDS allows exactly one binding per player (FR-004),
+and concurrent order streams produce id races and nondeterminism (violating
+Principle IV). Local-only transport rules (Principle IV, Additional
+Constraints Security) apply unchanged to multi-agent topologies.
+
 ## Additional Constraints
 
 - Technology: follow the existing GoK toolchain — C/C++ built with
@@ -47,8 +57,10 @@ capability MUST map to a verifiable spec criterion.
   vendored via subprojects per existing convention where feasible.
 - Platform expectations: feature MUST build on Linux first; macOS/Windows/Mingw
   parity is desirable but not gated for initial convergence.
-- Security: the MCP layer MUST NOT be exposed on a network socket by default;
-  local IPC (stdin/stdout or local socket) only.
+- Security: the MCP layer and any multi-agent tooling MUST NOT be exposed on
+  network sockets by default; local IPC (stdin/stdout, UDS, localhost-only
+  HTTP for LLM/model servers) only. LLM endpoint URLs are configuration, not
+  engine interfaces.
 
 ## Development Workflow
 
@@ -72,4 +84,4 @@ capability MUST map to a verifiable spec criterion.
 - Every PR/change MUST be checkable against the principles above; reviewers
   (or the agent completing a step) MUST verify compliance before completion.
 
-**Version**: 1.0.0 | **Ratified**: 2026-10-18 | **Last Amended**: 2026-10-18
+**Version**: 1.1.0 | **Ratified**: 2026-10-18 | **Last Amended**: 2026-10-19
