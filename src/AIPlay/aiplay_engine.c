@@ -738,6 +738,16 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
         {
             return aiplayError_badRequest;
         }
+        {
+            // already-known techs: reject instead of wasting a lab
+            Player *rp2 = &universe.players[aiplay.boundPlayer];
+            if (rp2->researchinfo.techstat != NULL &&
+                bitTest(rp2->researchinfo.HasTechnology,
+                        TechToBit((TechnologyType)tech)))
+            {
+                return aiplayError_badRequest;   // already researched
+            }
+        }
         Player *rp = &universe.players[aiplay.boundPlayer];
         sdword lab = rmFindFreeLab(rp);
         if (rp->researchinfo.CanDoResearch == FALSE || lab == -1)
@@ -878,6 +888,27 @@ static void backendTechTreeJSON(aiplayJsonBuf *out, int playerIndex)
         aiplayJsonBufAdd(out, "],", 2);
         aiplayJsonTrimComma(out);
         aiplayJsonBufAdd(out, "}", 1);
+    }
+    aiplayJsonBufAdd(out, "],", 2);   // keep comma: the next key needs it
+                                        // (TrimComma would eat it and
+                                        // yield ']"researched"' — the
+                                        // 2026-10-20 invalid-JSON bug)
+    aiplayJsonBufAddStr(out, "\"researched\":[");
+    bool rfirst = true;
+    for (TechnologyType tech = 0; tech < NumTechnologies; tech = (TechnologyType)((sdword)tech + 1))
+    {
+        if (p->researchinfo.techstat == NULL ||
+            !bitTest(p->researchinfo.HasTechnology, TechToBit(tech)))
+        {
+            continue;
+        }
+        if (!rfirst)
+        {
+            aiplayJsonBufAdd(out, ",", 1);
+        }
+        rfirst = false;
+        aiplayJsonBufPrintf(out, "\"%s\",", TechTypeToString(tech));
+        aiplayJsonTrimComma(out);
     }
     aiplayJsonBufAdd(out, "],", 2);
     aiplayJsonTrimComma(out);

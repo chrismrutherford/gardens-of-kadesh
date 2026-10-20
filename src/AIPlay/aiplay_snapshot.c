@@ -243,6 +243,8 @@ void aiplaySnapshotWrite(aiplayJsonBuf *out, const aiplayJsonDoc *doc, int32_t p
     bool running = be != NULL && be->gameRunning();
     aiplayJsonBufAddStr(out, "\"matchStatus\":{");
     aiplayJsonBool(out, "running", running);
+    aiplayJsonInt(out, "boundPlayerIndex",
+                  (int64_t)(be != NULL ? aiplayBoundPlayer() : -1));
     int  winner     = -1;
     bool anyAlive   = false;
     bool multiAlive = false;

@@ -214,8 +214,11 @@ EXECUTOR_PROMPT = """You are the EXECUTOR: a fast fleet-control model for a
 Homeworld-style RTS. Big-model advisors own an instruction QUEUE (see
 Instruction queue in the round prompt): STANDING CONSTRAINTS always apply
 (hold/maintain/keep — never mark them done, never block on them); work
-the top TASK first until queue_done / queue_fail, then the next. If there
-are no tasks, run the standing audit — never freeze the fleet.
+the top TASK first until queue_done / queue_fail, then the next. Call
+queue_done ONLY when observably complete (that ship exists in your fleet,
+the tech IS researching); call queue_fail after 2-3 failed attempts (with
+a note why). If there are no tasks, run the standing audit — never freeze
+the fleet.
 
 Standing audit (priority order):
 0. INTEL: enemy positions/composition unknown -> build a Probe (30 RU) and
@@ -231,9 +234,11 @@ Standing audit (priority order):
 2b. NO IDLE WARSHIPS: order null/parade/order? -> task them (guard
    Mothership, or attack per doctrine PRIORITY). Docked/parade warships
    are not attackers mid-defense.
-3. RESEARCH: plan techs not researching and labs free -> order_research
+3. RESEARCH: labs idle -> order_research the next tech on the research
+   path that is NOT in techTree.researched AND not in research[] now
    (tech name from the research list ONLY — NEVER a ship name).
-   E_NO_LABS -> build a ResearchShip first.
+   E_NO_LABS -> build a ResearchShip first. Engine rejects already-
+   researched techs.
 
 Doctrine: attack enemy collectors > research ships > warships > Mothership
 LAST; interceptors vs strike craft, bombers/ion vs capitals; scuttle
@@ -541,18 +546,18 @@ def commander_queue_action(name, args, result, round_no):
                             note=str(result)[:120])
                 return True
             return False
-        # order results: note onto every queue's active task (progress is
-        # visible to each editor); engine errors fail the active task
+        # order results: NOTE onto every queue's active task (progress is
+        # visible to each editor). Engine errors are NOT fatal to tasks —
+        # an unrelated batch error (E_BAD_ID on a stale id) must not kill
+        # a queued objective; persistent lack of progress trips the stall
+        # flag instead, and the executor's own queue_fail judges imposs.
         for q in queues.values():
             top = q.state.get("active_ref") or q.topmost()
             if top is None:
                 continue
-            if "E_" in result:
-                q.mark("failed", note=str(result)[:120])
-            else:
-                q.note("round %d: %s %s -> %s"
-                       % (round_no, name, json.dumps(args)[:60],
-                          result[:60]))
+            q.note("round %d: %s %s -> %s"
+                   % (round_no, name, json.dumps(args)[:60],
+                      result[:60]))
         return False
     except Exception:
         return False
@@ -653,11 +658,30 @@ def main():
                 log("observe error: " + snap["error"])
                 time.sleep(5)
                 continue
+            # binding check every round: a fresh/restarted game engine has
+            # boundPlayerIndex = -1 (tick-based reset detection can miss
+            # restarts when the save's starting tick is >= the old tail);
+            # read it from matchStatus (added to the snapshot by the layer)
+            if isinstance(snap, dict) and \
+                    snap.get("matchStatus", {}).get("boundPlayerIndex", 0) \
+                    == -1:
+                log("[round %d] engine reports UNBOUND — rebinding" % rnd)
+                try:
+                    ensure_bound(mcp, a.player)
+                except Exception as exc:
+                    log("rebind failed (retrying next round): %r" % exc)
+
             view = compress_snapshot(snap)
             if view["tick"] < last_tick_seen:
                 log("[round %d] MATCH RESET detected (tick %d -> %d); ids regenerated"
                     % (rnd, last_tick_seen, view["tick"]))
                 next_event_idx = 0          # fresh event stream
+                # the engine process may be NEW (game restart): binding was
+                # lost (boundPlayer=-1) — rebind or every order gets rejected
+                try:
+                    ensure_bound(mcp, a.player)
+                except Exception as exc:
+                    log("rebind after reset failed: %r" % exc)
                 try:
                     import agent_multi as _am
                     import os as _os

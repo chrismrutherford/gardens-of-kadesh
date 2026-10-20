@@ -237,14 +237,17 @@ class PeerLoop(threading.Thread):
         if self.queue is not None:
             parts.append("Your OWN queue (you may edit):")
             parts.append(self.queue.prompt_block().rstrip())
-            if self.all_queues:
-                parts.append("OTHER advisors' queues (arbitrate: name the"
-                             " MOST IMPORTANT task overall in your reply):")
-                for r, q in self.all_queues.items():
-                    if r == self.role or not q.instructions:
-                        continue
-                    parts.append("=== %s ===" % r)
-                    parts.append(q.prompt_block().rstrip())
+        if self.all_queues:
+            parts.append("OTHER advisors' queues (arbitrate: if a pending "
+                         "task has sat with NO progress notes for many "
+                         "rounds, or an important gap exists — researching/"
+                         "building/harvesting nothing — OBJECT naming the "
+                         "most important pending task overall):")
+            for r, q in self.all_queues.items():
+                if r == self.role or not q.instructions:
+                    continue
+                parts.append("=== %s ===" % r)
+                parts.append(q.prompt_block().rstrip())
             parts.append(EDITOR_HOWTO)
         if self.history:
             parts.append("recent thoughts: " + " | ".join(self.history))
@@ -640,6 +643,11 @@ class InstructionQueue:
             if note:
                 top.setdefault("notes", []).append(note[:160])
             self.state["rounds_no_progress"] = 0
+            self._write_history({"op": "mark", "id": top["id"],
+                                 "state": state,
+                                 "text": top["text"][:80],
+                                 "by": "commander", "at": int(now()),
+                                 "accepted": True})
             self._log("instruction #%d -> %s" % (top["id"], state))
             self.save()
 
