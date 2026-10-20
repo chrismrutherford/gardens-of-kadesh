@@ -730,8 +730,11 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
     }
     case aiplayVerb_research:
     {
-        TechnologyType tech = StrToTechType((char *)o->name);
-        if (tech < 0)
+        // plain int, NOT TechnologyType: GCC range-propagation has been
+        // seen deleting "tech < 0" enum checks here, letting -1 through to
+        // TimeToComplete[-1] (crash 137623, core 2026-10-19 21:33)
+        int tech = (int)StrToTechType((char *)o->name);
+        if (tech < 0 || tech >= (int)NumTechnologies)
         {
             return aiplayError_badRequest;
         }
