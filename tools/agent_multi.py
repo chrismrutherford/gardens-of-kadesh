@@ -144,6 +144,15 @@ class LoopLogger:
     def perf(self):
         self.log("PERF server-rounds=%d" % self.server_rounds)
 
+    def log_raw(self, text):
+        """Verbatim stream sink (reasoning/content deltas) — no newline."""
+        with self._lock:
+            try:
+                with open(self.path, "a") as f:
+                    f.write(text)
+            except OSError:
+                pass
+
 
 def session_dir(session_id):
     return "/tmp/aiplay-multi-%s" % session_id
@@ -156,7 +165,7 @@ class PeerLoop(threading.Thread):
 
     def __init__(self, role, mcp, llm, store, logger, prompt,
                  full_snapshot=False, use_events=False, orders_store=None,
-                 peer_stores=(), queue=None):
+                 peer_stores=(), queue=None, all_queues=None):
         super().__init__(name=role, daemon=True)
         self.role = role
         self.mcp = mcp
@@ -169,6 +178,7 @@ class PeerLoop(threading.Thread):
         self.orders_store = orders_store
         self.peer_stores = list(peer_stores)
         self.queue = queue
+        self.all_queues = all_queues
         self.round = 0
         self.tick_seen = -1
         self.event_idx = 0
@@ -225,7 +235,16 @@ class PeerLoop(threading.Thread):
             except (OSError, ValueError, AttributeError):
                 pass
         if self.queue is not None:
-            parts.append(self.queue.prompt_block())
+            parts.append("Your OWN queue (you may edit):")
+            parts.append(self.queue.prompt_block().rstrip())
+            if self.all_queues:
+                parts.append("OTHER advisors' queues (arbitrate: name the"
+                             " MOST IMPORTANT task overall in your reply):")
+                for r, q in self.all_queues.items():
+                    if r == self.role or not q.instructions:
+                        continue
+                    parts.append("=== %s ===" % r)
+                    parts.append(q.prompt_block().rstrip())
             parts.append(EDITOR_HOWTO)
         if self.history:
             parts.append("recent thoughts: " + " | ".join(self.history))
@@ -252,13 +271,40 @@ class PeerLoop(threading.Thread):
                              {"directives": []})
             return "idle"
         ctx = self._context(snap, running)
-        reply = self.llm.chat(ctx, expect_tools=False, max_tokens=4000)
+        # activity observability: what this peer is looking at this round
+        mine = [s for s in snap.get("ships", []) if s.get("owner") == 0]
+        foes = [s for s in snap.get("ships", []) if s.get("owner") != 0]
+        qsize = len(self.queue.instructions) if self.queue else 0
+        others = ""
+        if self.all_queues:
+            others = " | others: " + ", ".join(
+                "%s=%d" % (r, len(q.instructions))
+                for r, q in self.all_queues.items() if r != self.role)
+        self.logger.log(
+            "round %d: tick %s | fleet %d, enemies %d | RU %s | own-queue %d%s"
+            % (self.round, tick, len(mine), len(foes),
+               next((p.get("resourceUnits") for p in snap.get("players", [])
+                     if p.get("index") == 0), "?"), qsize, others))
+        # stream the big model's reasoning live into this role's log
+        reply, _ = self.llm.chat_stream(
+            [{"role": "system", "content": self.prompt},
+             {"role": "user", "content": ctx}],
+            log_raw_fn=self.logger.log_raw, use_tools=False,
+            max_tokens=4000)
+        self.logger.log("\n--- round %d reasoning end; verdict: %s"
+                        % (self.round, reply.strip()[:80]))
         if self.has_tool_call(reply):
             self.logger.log("discarded tool-call reply (FR-010)")
         elif reply.strip():
             self.history.append(reply[:120])
             self.history = self.history[-3:]
         summary, payload = _peer_payload(reply)
+        if not summary.strip() and not str(payload.get("notes", "")).strip():
+            # empty reply (thinking ate the budget): keep the previous
+            # artifact rather than overwriting it with nothing
+            self.logger.log("peer round %d: empty reply, kept last artifact"
+                            % self.round)
+            return "empty"
         self.store.write(self.role, self.role, tick, summary, payload)
         if self.queue is not None:
             try:
@@ -266,6 +312,8 @@ class PeerLoop(threading.Thread):
                     else None
                 if edits:
                     acc, rej = self.queue.apply(edits, self.role)
+                    self.logger.log("queue edits: %d accepted, %d rejected"
+                                    % (acc, rej))
                     if rej:
                         # feed the rejection history back to this peer
                         for h in self.queue.history()[-4:]:
@@ -273,6 +321,9 @@ class PeerLoop(threading.Thread):
                                     not h.get("accepted"):
                                 self.history.append(
                                     "editRejected: %s" % h.get("reason"))
+                                self.logger.log("  rejected %s: %s"
+                                                % (h.get("op"),
+                                                   h.get("reason")))
             except Exception as exc:
                 self.logger.log("queue edit error: %r" % exc)
         self.logger.server_rounds += 1
@@ -299,7 +350,9 @@ class PeerLoop(threading.Thread):
 
 import re as _re
 _BOILERPLATE = _re.compile(
-    r"^\s*(we need|i need|need |user:|user :|you are|okay|all right|let me)",
+    r"^\s*(we need|i need|need |user:|user :|you are|okay|all right|"
+    r"let me|let's|we are|we have|we see|we must|so |analysis:|"
+    r"first, |second, |looking at|given |tick=|as the )",
     _re.IGNORECASE)
 
 
@@ -368,8 +421,15 @@ INSTRUCTION_MIN, INSTRUCTION_MAX = 8, 200
 class InstructionQueue:
     """Shared priority queue: peers edit, the commander executes."""
 
-    def __init__(self, store, logger=None):
+    def __init__(self, store, role=None, logger=None):
         self.store = store
+        # per-advisor queue: role in {strategist, analyst, economist, critic};
+        # role=None keeps the legacy shared filenames
+        self.role = role
+        self.qname = "instruction-queue" if role is None else \
+            "instruction-queue-%s" % role
+        self.hname = "instruction-history" if role is None else \
+            "instruction-history-%s" % role
         self.lock = threading.Lock()
         self.logger = logger
         self.next_id = 1
@@ -380,19 +440,19 @@ class InstructionQueue:
 
     def _write_history(self, entry):
         try:
-            hist = self.store.read("instruction-history")
+            hist = self.store.read(self.hname)
         except (OSError, ValueError):
             hist = {"role": "queue-history", "entries": []}
         entries = hist.get("entries", [])
         entries.append(entry)
-        with open(self.store.path("instruction-history"), "w") as f:
+        with open(self.store.path(self.hname), "w") as f:
             f.write(json.dumps({"role": "queue-history",
                                 "entries": entries[-HISTORY_CAP:]}))
         return entries[-1]
 
     def load(self):
         try:
-            q = self.store.read("instruction-queue")
+            q = self.store.read(self.qname)
             self.instructions = [
                 i for i in q.get("instructions", [])
                 if isinstance(i, dict) and i.get("state") != "done"]
@@ -403,12 +463,16 @@ class InstructionQueue:
         return self.instructions
 
     def save(self):
-        self.store.write_raw("instruction-queue", {
-            "role": "queue",
-            "version": (self.store.read("instruction-queue").get(
-                "version", 0) + 1
-                if _json_ok(self.store.path("instruction-queue")) else 1)
-            if os.path.exists(self.store.path("instruction-queue")) else 1,
+        version = 1
+        if os.path.exists(self.store.path(self.qname)) and \
+                _json_ok(self.store.path(self.qname)):
+            try:
+                version = self.store.read(self.qname).get("version", 0) + 1
+            except (OSError, ValueError):
+                pass
+        self.store.write_raw(self.qname, {
+            "role": "queue" if self.role is None else self.role,
+            "version": version,
             "instructions": self.instructions,
         })
 
@@ -431,6 +495,14 @@ class InstructionQueue:
                         raise ValueError("one instruction per line")
                     if len(self.instructions) >= QUEUE_CAP:
                         raise ValueError("queue full")
+                    # duplicate spam guard: same author+text already queued
+                    norm = " ".join(text.lower().split())
+                    for it in self.instructions:
+                        if it.get("state") in ("pending", "active") and \
+                                " ".join(str(it.get("text", "")).lower()
+                                         .split()) == norm:
+                            raise ValueError("duplicate instruction #%d"
+                                             % it["id"])
                     prio = int(e.get("priority") or len(self.instructions) + 1)
                     prio = max(1, min(prio,          # clamp, not reject:
                                       len(self.instructions) + 1))
@@ -438,6 +510,9 @@ class InstructionQueue:
                         raise ValueError("queue full")
                     item = {"id": self.next_id, "text": text,
                             "state": "pending", "by": editor,
+                            "kind": str(e.get("kind") or
+                                       ("standing" if self._is_standing(text)
+                                        else "task")),
                             "at": int(now()), "notes": []}
                     self.instructions.insert(int(prio) - 1, item)
                     self.next_id += 1
@@ -502,7 +577,7 @@ class InstructionQueue:
 
     def history(self):
         try:
-            return self.store.read("instruction-history").get("entries", [])
+            return self.store.read(self.hname).get("entries", [])
         except (OSError, ValueError):
             return []
 
@@ -514,10 +589,25 @@ class InstructionQueue:
 
     # -- executor (commander) side ---------------------------------------
 
+    # heuristic: instructions phrased as standing orders never complete, so
+    # they must not occupy the ACTIVE slot and block real tasks
+    _STANDING_HINTS = ("hold ", "maintain", "keep ", "always", "never ",
+                       "ensure ", "protect ")
+
+    @staticmethod
+    def _is_standing(text):
+        t = text.strip().lower()
+        return t.startswith(InstructionQueue._STANDING_HINTS)
+
     def topmost(self):
-        """First non-done instruction; promotes to active."""
+        """First non-done TASK; standing instructions never block it."""
         for item in self.instructions:
             if item.get("state") in ("pending", "active"):
+                if item.get("kind") == "standing" or \
+                        (not item.get("kind") and
+                         self._is_standing(item["text"])):
+                    item["state"] = "active"      # standing: always-on
+                    continue
                 item["state"] = "active"
                 return item
         return None
@@ -572,15 +662,28 @@ class InstructionQueue:
     def prompt_block(self):
         if not self.instructions:
             return ""
-        lines = ["Instruction queue (execute TOP-FIRST; mark progress in"
-                 " notes):"]
-        for prio, item in enumerate(self.instructions, 1):
-            lines.append("  %d. [#%d %s|by %s] %s%s" % (
-                prio, item["id"], item["state"], item.get("by"),
-                item["text"],
-                (" recent: " + "; ".join(item.get("notes", [])[-2:]))
-                if item.get("notes") else ""))
-        return lines[0] + "\n" + "\n".join(lines[1:]) + "\n"
+        standing, tasks = [], []
+        for item in self.instructions:
+            if item.get("kind") == "standing" or \
+                    (not item.get("kind") and self._is_standing(item["text"])):
+                standing.append(item)
+            else:
+                tasks.append(item)
+        out = []
+        if standing:
+            out.append("Standing constraints (ALWAYS apply; never block, "
+                        "never mark done):")
+            out.extend("  * [#%d] %s" % (s["id"], s["text"])
+                       for s in standing)
+        if tasks:
+            out.append("Task queue (work TOP-FIRST one task at a time "
+                        "until queue_done/queue_fail):")
+            out.extend("  %d. [#%d %s|by %s] %s%s" % (
+                n, t["id"], t["state"], t.get("by"), t["text"],
+                (" recent: " + "; ".join(t.get("notes", [])[-2:]))
+                if t.get("notes") else "")
+                for n, t in enumerate(tasks, 1))
+        return "\n".join(out) + "\n"
 
 
 def _json_ok(path):
@@ -597,10 +700,14 @@ STALL_ROUNDS = 10
 EDITOR_HOWTO = (
     "As an editor you MAY include an \"edits\" array in your reply payload "
     '(JSON: {"summary": "...", "payload": {"edits": [...]}}) with ops: '
-    '{"op":"add","text":"<one imperative, 8-200 chars>","priority":N} / '
-    '{"op":"remove","id":N} / {"op":"move","id":N,"priority":N}. The '
-    "commander executes the queue top-first. Rejections for your edits "
-    "appear in your context as editRejected notes — correct and resubmit.")
+    '{"op":"add","text":"<one imperative, 8-200 chars>","priority":N,'
+    '"kind":"task"|"standing"} / {"op":"remove","id":N} / '
+    '{"op":"move","id":N,"priority":N}. TASKS are worked top-first by the '
+    "commander one at a time; STANDING instructions (hold/maintain/keep...) "
+    "are always-on constraints that never block and never complete — use "
+    "kind:\"standing\" for guard/maintain directives, tasks for scout/build/"
+    "attack actions. Rejections for your edits appear as editRejected "
+    "notes — correct and resubmit.")
 
 # --------------------------------------------------------------- launcher glue
 

@@ -100,8 +100,12 @@ def main():
     mcp = agent.MCP(a.mcp)
     agent.ensure_bound(mcp, a.player)
 
-    queue = agent_multi.InstructionQueue(store, commander_log)
-    queue.load()
+    # one instruction queue per advisor (commander serves them all;
+    # the critic arbitrates priorities by seeing every queue)
+    queues = {r: agent_multi.InstructionQueue(store, r, commander_log)
+              for r in ("strategist", "analyst", "economist", "critic")}
+    for q in queues.values():
+        q.load()
 
     peers = []
     for role, url in (("strategist", a.llm_strategist),
@@ -129,7 +133,8 @@ def main():
             use_events=role in ("analyst", "critic"),
             orders_store=store,
             peer_stores=(store,),
-            queue=queue,
+            queue=queues[role],
+            all_queues=queues if role == "critic" else None,
         )
         peers.append(loop)
         loop.start()

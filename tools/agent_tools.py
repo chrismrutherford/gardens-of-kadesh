@@ -131,15 +131,22 @@ TOOLS = [
             "name": {"type": "string", "description": "savegame name (agent auto-names it: autosave-<epoch seconds>)"}}}}},
     {"type": "function", "function": {
         "name": "queue_done",
-        "description": "Mark the current instruction-queue directive COMPLETED "
-                       "(done when the queue's top instruction is achieved)",
+        "description": "Mark an instruction COMPLETED. Params: q = owning "
+                       "advisor (strategist|analyst|economist|critic) and "
+                       "id = instruction number; omit id to complete that "
+                       "queue's current active task.",
         "parameters": {"type": "object", "properties": {
+            "q": {"type": "string",
+                  "enum": ["strategist", "analyst", "economist", "critic"]},
             "id": {"type": "integer"}}}}},
     {"type": "function", "function": {
         "name": "queue_fail",
-        "description": "Mark the current instruction-queue directive IMPOSSIBLE "
-                       "(e.g. locked hull, engine E_* errors persist)",
+        "description": "Mark an instruction IMPOSSIBLE (locked hull, "
+                       "persistent E_* errors). Same params as queue_done; "
+                       "the advisor will re-plan.",
         "parameters": {"type": "object", "properties": {
+            "q": {"type": "string",
+                  "enum": ["strategist", "analyst", "economist", "critic"]},
             "id": {"type": "integer"}}}}},
     {"type": "function", "function": {
         "name": "step",

@@ -3384,6 +3384,25 @@ udword smViewportProcess(regionhandle region, sdword ID, udword event, udword da
                     smSelectionRect.y0 = mouseCursorY() - smSelectionHeight / 2;
                     smSelectionRect.y1 = mouseCursorY() + smSelectionHeight / 2;
                     clickedOn = selSelectionClick(universe.SpaceObjList.head, &smCamera, mouseCursorX(), mouseCursorY(), FALSE, FALSE);
+                    {
+                        char *pickedName = NULL;
+                        bool32 own = TRUE;
+                        if (clickedOn != NULL)
+                        {
+                            if (clickedOn->playerowner != universe.curPlayerPtr)
+                            {
+                                own = FALSE;
+                                pickedName = "foreign";
+                            }
+                            else
+                            {
+                                pickedName = ShipTypeToNiceStr(clickedOn->shiptype);
+                            }
+                        }
+                        dbgMessagef("SMTRACE: click-pick=%s own=%d",
+                                    pickedName == NULL ? "none" : pickedName,
+                                    own);
+                    }
                     if (clickedOn != NULL)
                     {
                         if (clickedOn->playerowner != universe.curPlayerPtr && (!smGhostMode))
@@ -3394,6 +3413,7 @@ udword smViewportProcess(regionhandle region, sdword ID, udword event, udword da
                 }
                 else
                 {
+                    dbgMessagef("SMTRACE: box-select drag");
                     mrSelectRectBuild(&smSelectionRect, mrOldMouseX, mrOldMouseY);//create a selection rect
                 }
                 if (smHoldRight == smNULL)
@@ -3416,7 +3436,14 @@ udword smViewportProcess(regionhandle region, sdword ID, udword event, udword da
                             selSelectionAddSingleShip((MaxSelection *)(&selSelecting), clickedOn);
                         }
                     }
+                    dbgMessagef("SMTRACE: before-cull selSelecting=%d "
+                                "curPlayer=%d ghost=%d disabled=%d",
+                                selSelecting.numTargets,
+                                universe.curPlayerIndex, smGhostMode,
+                                clickedOn == (Ship *)FALSE);
                     smCullAndFocusSelecting();
+                    dbgMessagef("SMTRACE: after-cull selSelecting=%d",
+                                selSelecting.numTargets);
                 }
             }
             mouseClipToRect(NULL);

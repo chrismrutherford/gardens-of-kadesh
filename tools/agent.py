@@ -115,19 +115,28 @@ class LLM:
         with urllib.request.urlopen(req, timeout=600) as r:
             data = json.loads(r.read())
         msg = data["choices"][0]["message"]
-        return msg.get("content") or msg.get("reasoning_content") or ""
+        # NOTE: no reasoning_content fallback — peers must publish only the
+        # final answer; leaking chain-of-thought poisons the artifact files
+        return msg.get("content") or ""
 
-    def chat_stream(self, messages):
-        """Consume the SSE stream; log deltas live; return (content, calls)."""
+    def chat_stream(self, messages, log_raw_fn=None, use_tools=True,
+                    max_tokens=2600):
+        """Consume the SSE stream; log deltas live; return (content, calls).
+
+        log_raw_fn: verbatim delta sink (per-role logger for peers);
+        defaults to the commander's log_raw.
+        """
+        emit = log_raw_fn or log_raw
         payload = {
             "model": self.model,
             "messages": messages,
-            "tools": TOOLS,
             "stream": True,
             "temperature": self.temperature,
-            "max_tokens": 2600,
+            "max_tokens": max_tokens,
             "chat_template_kwargs": {"enable_thinking": True},
         }
+        if use_tools:
+            payload["tools"] = TOOLS
         req = urllib.request.Request(
             self.base + "/v1/chat/completions",
             data=json.dumps(payload).encode(),
@@ -148,9 +157,9 @@ class LLM:
                     continue
                 d = ch.get("delta", {})
                 if d.get("reasoning_content"):
-                    log_raw(d["reasoning_content"])
+                    emit(d["reasoning_content"])
                 if d.get("content") is not None:
-                    log_raw(d["content"])
+                    emit(d["content"])
                     content += d["content"]
                 for tc in d.get("tool_calls") or []:
                     i = tc.get("index", 0)
@@ -162,7 +171,7 @@ class LLM:
                         slot["name"] += fn["name"]
                     if fn.get("arguments"):
                         slot["args"] += fn["arguments"]
-        log_raw("\n")
+        emit("\n")
         tool_calls = [calls[k] for k in sorted(calls)]
         return content, tool_calls
 
@@ -202,35 +211,41 @@ def ensure_bound(mcp, player):
 # ---------------------------------------------------------------- prompting
 
 EXECUTOR_PROMPT = """You are the EXECUTOR: a fast fleet-control model for a
-Homeworld-style RTS. Big-model advisors publish directives (see Peer
-directives). Your job is mechanical enforcement, every round, in this order:
-1. ECONOMY FIRST: every ResourceCollector sitting parked/docked/parade
-   gets order_harvest (nearest asteroid) BEFORE anything else — income
-   compounds; without it you lose.
-1b. EARLY LOGISTICS: before you have a ResourceController (or a second
-   collector), move the Mothership TOWARD the densest nearby resource
-   cluster (order_move to just off the patch) so collectors have short
-   trips. Once it is near the resources, KEEP IT THERE — do not move
-   it back or park it elsewhere; hold near the patch as long as it is
-   harvesting from there.
-2. PRODUCTION: any ship the directives' production plan needs but the
-   buildQueue lacks -> order_build it now. Check techTree.locked first:
-   hulls with EMPTY "missing" are disabled this match — never research or
-   build those; hulls with techs in "missing" need that research first;
-   everything else is unlocked — just build it.
-2b. NO IDLE SHIPS: a warship is idle if order is null, or verb "parade"
-   or "order?" (unparsed). Task it this round: attack with warships
-   (use dps/range), guard Mothership otherwise. Never count
-   docked/parade warships as attackers mid-defense.
-3. RESEARCH: any tech on the research path not listed researching, and
-   labs free -> order_research now (E_NO_LABS -> build ResearchShip first).
-   The tech= name MUST come from the research list in the playbook (e.g.
-   Chassis1, MassDrive1Kt) — NEVER a ship name like "ResourceCollector".
-Issue MULTIPLE tool calls per round (batch them): fix EVERY gap you
-found — harvest idlers, the build, the research — as parallel native tool
-calls in one reply. Each call gets its own result next round. Cap at 6.
-When no gaps remain, follow the newest big-model directive. Keep replies
-short; skip long reasoning."""
+Homeworld-style RTS. Big-model advisors own an instruction QUEUE (see
+Instruction queue in the round prompt): STANDING CONSTRAINTS always apply
+(hold/maintain/keep — never mark them done, never block on them); work
+the top TASK first until queue_done / queue_fail, then the next. If there
+are no tasks, run the standing audit — never freeze the fleet.
+
+Standing audit (priority order):
+0. INTEL: enemy positions/composition unknown -> build a Probe (30 RU) and
+   order_move it toward the enemy contacts NOW. NEVER halt the economy or
+   hold builds waiting for intel — go LOOK. Kill enemy probes in our space.
+1. ECONOMY FIRST: every ResourceCollector parked/docked/parade gets
+   order_harvest (nearest asteroid) BEFORE anything else — income compounds;
+   without it you lose. RU bank > 1.5x next build -> build it now.
+1b. LOGISTICS: park the Mothership near the resource patch and KEEP it
+   there; build a ResourceController when a second patch exists.
+2. PRODUCTION: plan hulls missing from buildQueue -> build. techTree.locked
+   with EMPTY "missing" = disabled this match — never build/research those.
+2b. NO IDLE WARSHIPS: order null/parade/order? -> task them (guard
+   Mothership, or attack per doctrine PRIORITY). Docked/parade warships
+   are not attackers mid-defense.
+3. RESEARCH: plan techs not researching and labs free -> order_research
+   (tech name from the research list ONLY — NEVER a ship name).
+   E_NO_LABS -> build a ResearchShip first.
+
+Doctrine: attack enemy collectors > research ships > warships > Mothership
+LAST; interceptors vs strike craft, bombers/ion vs capitals; scuttle
+piecemeal scouts into unguarded enemy collectors when behind.
+
+TIME: the game runs in real time — NEVER call pause/step/resume; waiting is
+done by issuing the next order next round. Holding is done with your fleet,
+not the clock.
+
+Issue MULTIPLE tool calls per round (batch them): fix EVERY gap — harvest
+idlers, the build, the research — as parallel native tool calls in one
+reply. Cap at 6. Keep replies short; skip long reasoning."""
 
 SYSTEM_PROMPT = """You are the fleet commander AI for a Homeworld (1999-style) RTS game,
 playing one side of a real-time skirmish while a human spectates the live game window.
@@ -434,23 +449,59 @@ TOOL_VERB = {"order_move": "move", "order_attack": "attack",
 _QUEUE_TOOLS = {"queue_done", "queue_fail"}
 
 
+QUEUE_ROLES = ("strategist", "analyst", "economist", "critic")
+
+
+def _queues_for(d):
+    import agent_multi as _am
+    store = _am.ArtifactStore(d)
+    queues = {}
+    for role in QUEUE_ROLES:
+        q = _am.InstructionQueue(store, role)
+        q.load()
+        queues[role] = q
+    return queues
+
+
 def commander_queue(rnd):
-    """agent-multi hook: queue consumption for this round."""
+    """agent-multi hook: render every advisor's queue for this round."""
     import os as _os
     import agent_multi as _am
     d = _os.environ.get("AIPLAY_MULTI_DIR")
     if not d:
         return ""
     try:
-        if merge_peer_artifacts.__dict__.get("_reset_tick", None) is not None:
-            pass
-    except Exception:
-        pass
-    try:
-        q = _am.InstructionQueue(_am.ArtifactStore(d))
-        q.load()
-        top = q.work_round(rnd)
-        return q.prompt_block() if top is not None or q.instructions else ""
+        queues = _queues_for(d)
+        parts = []
+        pickup = []
+        for role, q in queues.items():
+            if not q.instructions:
+                continue
+            parts.append("=== %s's instructions ===" % role)
+            parts.append(q.prompt_block().rstrip())
+            # observability: what the commander is serving this round
+            tasks = [t for t in q.instructions
+                     if not (t.get("kind") == "standing" or
+                             (not t.get("kind") and
+                              _am.InstructionQueue._is_standing(t["text"])))
+                     and t.get("state") in ("pending", "active")]
+            stand = len(q.instructions) - len(tasks)
+            if tasks:
+                pickup.append("%s:#%d %s [%s]"
+                              % (role, tasks[0]["id"],
+                                 tasks[0]["text"][:40],
+                                 tasks[0]["state"]))
+            elif stand:
+                pickup.append("%s: standing-only" % role)
+        if pickup:
+            log("[round %d] QUEUE pickup: %s"
+                % (rnd, " | ".join(pickup)))
+        if not parts:
+            return ""
+        return ("\nYou have one queue PER advisor. Do your best to serve "
+                "them ALL: batch across queues (up to 6 calls/round); when "
+                "you cannot, the CRITIC's latest advice names the most "
+                "important.\n" + "\n".join(parts) + "\n")
     except Exception:
         return ""
 
@@ -459,36 +510,52 @@ _queue_state = {"active_id": None}
 
 
 def commander_queue_action(name, args, result, round_no):
-    """Route pseudo-tools + order bookkeeping to the queue."""
+    """Route pseudo-tools + order bookkeeping to the per-role queues."""
     import os as _os
     import agent_multi as _am
     d = _os.environ.get("AIPLAY_MULTI_DIR")
     if not d:
         return False
     try:
-        q = _am.InstructionQueue(_am.ArtifactStore(d))
-        q.load()
-        top = q.state.get("active_ref")
-        if top is None:
-            top = q.work_round(round_no)
-        if name == "queue_done":
-            q.mark("done", note=str(result)[:120])
-            return True
-        if name == "queue_fail":
-            q.mark("failed", note=str(result)[:120])
-            return True
-        if name.startswith("order") and top is not None:
-            err = "E_" in result
-            if err:
+        queues = _queues_for(d)
+        role = args.get("q") if isinstance(args, dict) else None
+        if name in ("queue_done", "queue_fail"):
+            # target queue: explicit "q" param, else the queue owning that id
+            candidates = [queues[role]] if role in queues else \
+                [q for q in queues.values()]
+            target, iid = None, None
+            try:
+                iid = int(args.get("id"))
+            except (TypeError, ValueError, AttributeError):
+                iid = None
+            for q in candidates:
+                top = q.state.get("active_ref") or q.topmost()
+                if iid is not None and q._indexOf(iid) is not None:
+                    target, top = q, q.instructions[q._indexOf(iid)]
+                    break
+                if iid is None and top is not None and target is None:
+                    target, _top = q, top
+            if target is not None:
+                target.state["active_ref"] = top
+                target.mark("done" if name == "queue_done" else "failed",
+                            note=str(result)[:120])
+                return True
+            return False
+        # order results: note onto every queue's active task (progress is
+        # visible to each editor); engine errors fail the active task
+        for q in queues.values():
+            top = q.state.get("active_ref") or q.topmost()
+            if top is None:
+                continue
+            if "E_" in result:
                 q.mark("failed", note=str(result)[:120])
             else:
                 q.note("round %d: %s %s -> %s"
                        % (round_no, name, json.dumps(args)[:60],
                           result[:60]))
-            return False
+        return False
     except Exception:
         return False
-    return False
 
 
 def main():
@@ -507,6 +574,12 @@ def main():
     import os as _os
     prompt_key = _os.environ.get("AIPLAY_MULTI_PROMPT")  # "executor" override
     base_prompt = EXECUTOR_PROMPT if prompt_key == "executor" else SYSTEM_PROMPT
+    # executor must not touch the clock: strip time-control tools
+    if prompt_key == "executor":
+        global TOOLS
+        _TIME_TOOLS = {"pause", "resume", "step"}
+        TOOLS = [t for t in TOOLS
+                 if t["function"]["name"] not in _TIME_TOOLS]
 
     session_banner(f"player={a.player} mcp={a.mcp} llm={a.llm} rounds={a.max_rounds}")
     # load the playbook (build costs + research chains extracted from game data)
@@ -590,7 +663,9 @@ def main():
                     import os as _os
                     _d = _os.environ.get("AIPLAY_MULTI_DIR")
                     if _d:
-                        _am.InstructionQueue(_am.ArtifactStore(_d)).clear()
+                        for _r in QUEUE_ROLES:
+                            _am.InstructionQueue(
+                                _am.ArtifactStore(_d), _r).clear()
                 except Exception:
                     pass
             last_tick_seen = max(last_tick_seen, view["tick"])

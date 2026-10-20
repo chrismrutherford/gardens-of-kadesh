@@ -15,7 +15,8 @@ set -euo pipefail
 PROG=$(basename "$0")
 LIVE="$(ls -dt /tmp/aiplay-multi-*/ 2>/dev/null | head -1 || true)"
 
-if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+ARG1="${1:-}"
+if [[ "$ARG1" == "-h" || "$ARG1" == "--help" ]]; then
     echo "usage: $PROG [options] [role...]"
     echo
     echo "tails agent-multi fleet logs (role-prefixed)."
@@ -38,7 +39,7 @@ if [[ -z "$LIVE" ]]; then
     exit 1
 fi
 
-if [[ "$1" == "-l" || "$1" == "--list" ]]; then
+if [[ "$ARG1" == "-l" || "$ARG1" == "--list" ]]; then
     echo "live session: $LIVE"
     for r in strategist analyst economist critic commander; do
         if [[ "$r" == "commander" ]]; then

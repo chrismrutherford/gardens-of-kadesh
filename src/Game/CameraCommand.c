@@ -1697,6 +1697,17 @@ sdword ccFocusCullRadiusGeneral(FocusCommand *out, FocusCommand *in, real32 radi
         dy = ABS(in->ShipPtr[index]->obj.posinfo.position.y - centre->y);
         dz = ABS(in->ShipPtr[index]->obj.posinfo.position.z - centre->z);
         distanceSqr = dx * dx + dy * dy + dz * dz;          //compute distance from centre
+        if (index == 0)
+        {
+            dbgMessagef("CC-TRACE2: ship=%d pos=[%.1f,%.1f,%.1f] "
+                        "centre=[%.1f,%.1f,%.1f] dist2=%.1f radius2=%.1f",
+                        index,
+                        in->ShipPtr[index]->obj.posinfo.position.x,
+                        in->ShipPtr[index]->obj.posinfo.position.y,
+                        in->ShipPtr[index]->obj.posinfo.position.z,
+                        centre->x, centre->y, centre->z,
+                        distanceSqr, radiusSqr);
+        }
         if (distanceSqr <= radiusSqr)
         {                                                   //if this ship close enough to the mean
             out->ShipPtr[out->numShips] = in->ShipPtr[index];
@@ -1752,6 +1763,8 @@ sdword ccFocusCullRadiusMean(FocusCommand *selection, real32 radiusSqr, vector *
                 iMaxFocussed = iOuter;
             }
         }
+        dbgMessagef("CC-TRACE: mean-cull bailed; ships=%d best=%d",
+                    selection->numShips, maxFocussed);
         if (maxFocussed == 0)
         {   //everything culled (e.g. NaN/garbage positions in stale selections):
             //bail gracefully; callers treat a 0 return as nothing to focus on

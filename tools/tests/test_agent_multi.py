@@ -61,6 +61,20 @@ class FakeLLM:
                 self.replies = list(self.base)
         return self.replies.pop(0) if self.replies else ""
 
+    def chat_stream(self, messages, log_raw_fn=None, use_tools=True,
+                    max_tokens=2600):
+        """Test double: mirrors agent.LLM.chat_stream for peer loops."""
+        self.prompts.append("\n".join(m["content"]
+                                       for m in messages))
+        self.chat_kwargs.append({"use_tools": use_tools})
+        if self.cycle and self.base:
+            if not self.replies:
+                self.replies = list(self.base)
+        reply = self.replies.pop(0) if self.replies else ""
+        if log_raw_fn is not None:
+            log_raw_fn(reply)      # peers log their reply verbatim
+        return reply, []
+
 
 def snap(tick=100, running=True, orders=None):
     m = {"tick": tick,
@@ -169,10 +183,11 @@ class PeerLoopTest(unittest.TestCase):
 
     def test_no_tools_passed_to_peer_llm(self):
         side = FakeSidecar(snap())
-        llm = FakeLLM(["advice"], cycle=False)
+        llm = FakeLLM(["advice"])
         loop = self._mkloop(side, llm)
         self._steps(loop, 1)
-        self.assertTrue(all(not kw.get("expect_tools", True)
+        self.assertTrue(all(not kw.get("use_tools", kw.get("expect_tools",
+                                                          True))
                             for kw in llm.chat_kwargs))
 
     def test_tool_call_reply_discarded_fr010(self):
@@ -225,8 +240,10 @@ class ExecutorPromptTest(unittest.TestCase):
         prompt = agent.EXECUTOR_PROMPT
         self.assertIn("ECONOMY FIRST", prompt)
         self.assertIn("PRODUCTION", prompt)
-        self.assertIn("NO IDLE SHIPS", prompt)
+        self.assertIn("NO IDLE WARSHIPS", prompt)
         self.assertIn("RESEARCH", prompt)
+        self.assertIn("INTEL", prompt)          # anti-paralysis rule
+        self.assertIn("NEVER call pause/step/resume", prompt)
 
     def test_merge_zero_without_env(self):
         os.environ.pop("AIPLAY_MULTI_DIR", None)
@@ -393,6 +410,70 @@ class InstructionQueueTest(unittest.TestCase):
         self.assertEqual(block, "")
 
     # FR-004: commander never edits
+    # standing vs task split: standing orders never block the active task
+    def test_standing_instruction_does_not_block(self):
+        self._add("analyst", text="Hold Mothership defensive vs 27 enemies",
+                  prio=1)                      # standing by heuristic
+        self._add("strategist", text="Send probes to screen enemy positions",
+                  prio=2)                      # a task
+        top = self.q.work_round(1)
+        self.assertIn("probes", top["text"])   # task picked, not the hold
+        block = self.q.prompt_block()
+        self.assertIn("Standing constraints", block)
+        self.assertIn("ALWAYS apply", block)
+        self.assertIn("Task queue", block)
+        self.assertIn("Hold Mothership", block)  # rendered as standing
+
+    def test_kind_passthrough_and_no_stall_on_standing(self):
+        self.q.apply([{"op": "add",
+                       "text": "Escort collectors at all times",
+                       "kind": "standing", "priority": 1}], "strategist")
+        agent_multi.STALL_ROUNDS = 2
+        try:
+            for _ in range(3):
+                top = self.q.work_round(1)
+            self.assertIsNone(top)             # nothing to stall
+            self.assertEqual(self.q.instructions[0]["state"], "active")
+        finally:
+            agent_multi.STALL_ROUNDS = 10
+
+    def test_per_role_queues_and_commander_routing(self):
+        qs = {r: agent_multi.InstructionQueue(self.store, r)
+              for r in ("strategist", "analyst", "economist", "critic")}
+        for r in qs:
+            qs[r].load()
+        qs["strategist"].apply([{"op": "add",
+                                 "text": "build the IonFrigate pair now"}],
+                               "strategist")
+        qs["analyst"].apply([{"op": "add",
+                              "text": "scout the enemy flank zone"}],
+                             "analyst")
+        # files are per-role
+        doc = json.loads(open(
+            self.store.path("instruction-queue-strategist")).read())
+        self.assertIn("IonFrigate", doc["instructions"][0]["text"])
+        adoc = json.loads(open(
+            self.store.path("instruction-queue-analyst")).read())
+        self.assertIn("scout", adoc["instructions"][0]["text"])
+        # commander routing: queue_done with q+id hits the right queue
+        import agent
+        os.environ["AIPLAY_MULTI_DIR"] = self.dir
+        try:
+            agent.commander_queue_action(
+                "queue_done",
+                {"q": "analyst",
+                 "id": adoc["instructions"][0]["id"]},
+                '{"handled": true}', 3)
+            reloaded = agent_multi.InstructionQueue(self.store, "analyst")
+            reloaded.load()
+            # done instructions are filtered out of the working set
+            self.assertEqual(reloaded.instructions, [])
+            raw = json.loads(open(
+                self.store.path("instruction-queue-analyst")).read())
+            self.assertEqual(raw["instructions"][0]["state"], "done")
+        finally:
+            os.environ.pop("AIPLAY_MULTI_DIR", None)
+
     def test_commander_side_has_no_apply(self):
         self.assertFalse(hasattr(agent, "InstructionQueue"))
         self.assertTrue(hasattr(agent_multi.InstructionQueue, "apply"))
