@@ -156,7 +156,7 @@ class PeerLoop(threading.Thread):
 
     def __init__(self, role, mcp, llm, store, logger, prompt,
                  full_snapshot=False, use_events=False, orders_store=None,
-                 peer_stores=()):
+                 peer_stores=(), queue=None):
         super().__init__(name=role, daemon=True)
         self.role = role
         self.mcp = mcp
@@ -168,6 +168,7 @@ class PeerLoop(threading.Thread):
         self.use_events = use_events
         self.orders_store = orders_store
         self.peer_stores = list(peer_stores)
+        self.queue = queue
         self.round = 0
         self.tick_seen = -1
         self.event_idx = 0
@@ -223,6 +224,9 @@ class PeerLoop(threading.Thread):
                 parts.append("recentOrders=" + json.dumps(ring[-6:]))
             except (OSError, ValueError, AttributeError):
                 pass
+        if self.queue is not None:
+            parts.append(self.queue.prompt_block())
+            parts.append(EDITOR_HOWTO)
         if self.history:
             parts.append("recent thoughts: " + " | ".join(self.history))
         return "\n".join(p[:3000] for p in parts)
@@ -256,6 +260,21 @@ class PeerLoop(threading.Thread):
             self.history = self.history[-3:]
         summary, payload = _peer_payload(reply)
         self.store.write(self.role, self.role, tick, summary, payload)
+        if self.queue is not None:
+            try:
+                edits = payload.get("edits") if isinstance(payload, dict) \
+                    else None
+                if edits:
+                    acc, rej = self.queue.apply(edits, self.role)
+                    if rej:
+                        # feed the rejection history back to this peer
+                        for h in self.queue.history()[-4:]:
+                            if h.get("by") == self.role and \
+                                    not h.get("accepted"):
+                                self.history.append(
+                                    "editRejected: %s" % h.get("reason"))
+            except Exception as exc:
+                self.logger.log("queue edit error: %r" % exc)
         self.logger.server_rounds += 1
         self.tick_seen = max(self.tick_seen, tick)
         self.logger.log("peer round %d published: %s" % (self.round,
@@ -278,8 +297,25 @@ class PeerLoop(threading.Thread):
                 backoff = min(backoff * 2, 30.0)
 
 
+import re as _re
+_BOILERPLATE = _re.compile(
+    r"^\s*(we need|i need|need |user:|user :|you are|okay|all right|let me)",
+    _re.IGNORECASE)
+
+
+def _clean_reply(text):
+    """Drop Qwen-style leading meta commentary before the real content."""
+    lines = text.strip().splitlines()
+    start = 0
+    while start < len(lines) and (not lines[start].strip() or
+                                  _BOILERPLATE.match(lines[start])):
+        start += 1
+    return "\n".join(lines[start:])
+
+
 def _peer_payload(reply):
     """Peer replies are freeform; try a JSON envelope, fall back to raw."""
+    reply = _clean_reply(reply)
     try:
         doc = json.loads(reply)
         if isinstance(doc, dict) and "payload" in doc:
@@ -321,6 +357,250 @@ def merge_artifacts(store, stale_secs=STALE_DEFAULT_SECS, now_fn=now):
         budget -= len(text)
     return fresh, stale
 
+
+# ------------------------------------------------------- instruction queue
+
+QUEUE_CAP = 12
+HISTORY_CAP = 100
+INSTRUCTION_MIN, INSTRUCTION_MAX = 8, 200
+
+
+class InstructionQueue:
+    """Shared priority queue: peers edit, the commander executes."""
+
+    def __init__(self, store, logger=None):
+        self.store = store
+        self.lock = threading.Lock()
+        self.logger = logger
+        self.next_id = 1
+        self.instructions = []
+        self.state = {"active": None, "rounds_no_progress": 0}
+
+    # -- persistence ------------------------------------------------------
+
+    def _write_history(self, entry):
+        try:
+            hist = self.store.read("instruction-history")
+        except (OSError, ValueError):
+            hist = {"role": "queue-history", "entries": []}
+        entries = hist.get("entries", [])
+        entries.append(entry)
+        with open(self.store.path("instruction-history"), "w") as f:
+            f.write(json.dumps({"role": "queue-history",
+                                "entries": entries[-HISTORY_CAP:]}))
+        return entries[-1]
+
+    def load(self):
+        try:
+            q = self.store.read("instruction-queue")
+            self.instructions = [
+                i for i in q.get("instructions", [])
+                if isinstance(i, dict) and i.get("state") != "done"]
+            self.next_id = max(
+                [i["id"] for i in self.instructions], default=0) + 1
+        except (OSError, ValueError):
+            pass
+        return self.instructions
+
+    def save(self):
+        self.store.write_raw("instruction-queue", {
+            "role": "queue",
+            "version": (self.store.read("instruction-queue").get(
+                "version", 0) + 1
+                if _json_ok(self.store.path("instruction-queue")) else 1)
+            if os.path.exists(self.store.path("instruction-queue")) else 1,
+            "instructions": self.instructions,
+        })
+
+    # -- editor ops (peers only) -----------------------------------------
+
+    def apply(self, edits, editor):
+        """Validate + apply one peer's edit list; returns accepted/rejected."""
+        accepted, rejected = 0, 0
+        for e in edits or []:
+            try:
+                if not isinstance(e, dict):
+                    raise ValueError("edit not an object")
+                op = e.get("op")
+                if op == "add":
+                    text = str(e.get("text", "")).strip()
+                    if not (INSTRUCTION_MIN <= len(text) <= INSTRUCTION_MAX):
+                        raise ValueError("text length %d..%d"
+                                         % (INSTRUCTION_MIN, INSTRUCTION_MAX))
+                    if "\n" in text:
+                        raise ValueError("one instruction per line")
+                    if len(self.instructions) >= QUEUE_CAP:
+                        raise ValueError("queue full")
+                    prio = int(e.get("priority") or len(self.instructions) + 1)
+                    prio = max(1, min(prio,          # clamp, not reject:
+                                      len(self.instructions) + 1))
+                    if len(self.instructions) >= QUEUE_CAP:
+                        raise ValueError("queue full")
+                    item = {"id": self.next_id, "text": text,
+                            "state": "pending", "by": editor,
+                            "at": int(now()), "notes": []}
+                    self.instructions.insert(int(prio) - 1, item)
+                    self.next_id += 1
+                    self._write_history({"op": "add", "id": item["id"],
+                                         "priority": prio, "text": text,
+                                         "by": editor, "at": item["at"],
+                                         "accepted": True})
+                    accepted += 1
+                elif op == "remove":
+                    i = self._indexOf(e.get("id"))
+                    if i is None:
+                        raise ValueError("unknown id %r" % e.get("id"))
+                    self.instructions.pop(i)
+                    self._write_history({"op": "remove",
+                                         "id": e.get("id"), "by": editor,
+                                         "at": int(now()), "accepted": True})
+                    accepted += 1
+                elif op == "move":
+                    i = self._indexOf(e.get("id"))
+                    if i is None:
+                        raise ValueError("unknown id %r" % e.get("id"))
+                    prio = max(1, min(int(e.get("priority")),
+                                      max(1, len(self.instructions))))
+                    item = self.instructions.pop(i)
+                    self.instructions.insert(prio - 1, item)
+                    self._write_history({"op": "move", "id": item["id"],
+                                         "priority": prio, "by": editor,
+                                         "at": int(now()), "accepted": True})
+                    accepted += 1
+                elif op == "prune":
+                    n_before = len(self.instructions)
+                    self.instructions = [it for it in self.instructions
+                                         if it.get("state") in
+                                         ("pending", "active")]
+                    self._write_history({"op": "prune",
+                                         "removed": n_before -
+                                         len(self.instructions),
+                                         "by": editor, "at": int(now()),
+                                         "accepted": True})
+                    accepted += 1
+                else:
+                    raise ValueError("unknown op %r" % op)
+            except ValueError as exc:
+                rejected += 1
+                self._write_history({"op": str((e or {}).get("op")),
+                                     "by": editor, "at": int(now()),
+                                     "accepted": False,
+                                     "reason": str(exc)})
+        if accepted:
+            self.save()
+        if accepted or rejected:
+            self._log("edits by %s: %d accepted, %d rejected"
+                      % (editor, accepted, rejected))
+        return accepted, rejected
+
+    def reset_if_new(self):
+        """Called by the commander when it detects a match reset/clear."""
+        with self.lock:
+            self.instructions = []
+            self.state = {"active": None, "rounds_no_progress": 0}
+            self.save()
+
+    def history(self):
+        try:
+            return self.store.read("instruction-history").get("entries", [])
+        except (OSError, ValueError):
+            return []
+
+    def clear(self):
+        with self.lock:
+            self.instructions = []
+            self.state = {"active": None, "rounds_no_progress": 0}
+            self.save()
+
+    # -- executor (commander) side ---------------------------------------
+
+    def topmost(self):
+        """First non-done instruction; promotes to active."""
+        for item in self.instructions:
+            if item.get("state") in ("pending", "active"):
+                item["state"] = "active"
+                return item
+        return None
+
+    def note(self, text):
+        top = self.state.get("active_ref")
+        if top is not None:
+            top.setdefault("notes", []).append(text[:160])
+            top["notes"] = top["notes"][-5:]
+
+    def work_round(self, cmd_round):
+        top = self.topmost()
+        self.state["active_ref"] = top
+        if top is None:
+            self.state["rounds_no_progress"] = 0
+            return None
+        if top.get("state") == "active":
+            self.state["rounds_no_progress"] += 1
+            if self.state["rounds_no_progress"] >= STALL_ROUNDS:
+                top["state"] = "stalled"
+                self.state["rounds_no_progress"] = 0
+                self._log("instruction #%d stalled" % top["id"])
+                self.save()
+        return top
+
+    def mark(self, state, note=None):
+        top = self.state.get("active_ref")
+        if top is not None:
+            top["state"] = state
+            if note:
+                top.setdefault("notes", []).append(note[:160])
+            self.state["rounds_no_progress"] = 0
+            self._log("instruction #%d -> %s" % (top["id"], state))
+            self.save()
+
+    def _log(self, msg):
+        if self.logger is not None:
+            self.logger.log(msg)
+
+    def _indexOf(self, iid):
+        try:
+            iid = int(iid)
+        except (TypeError, ValueError):
+            return None
+        for i, item in enumerate(self.instructions):
+            if item["id"] == iid:
+                return i
+        return None
+
+    # -- formatter -------------------------------------------------------
+
+    def prompt_block(self):
+        if not self.instructions:
+            return ""
+        lines = ["Instruction queue (execute TOP-FIRST; mark progress in"
+                 " notes):"]
+        for prio, item in enumerate(self.instructions, 1):
+            lines.append("  %d. [#%d %s|by %s] %s%s" % (
+                prio, item["id"], item["state"], item.get("by"),
+                item["text"],
+                (" recent: " + "; ".join(item.get("notes", [])[-2:]))
+                if item.get("notes") else ""))
+        return lines[0] + "\n" + "\n".join(lines[1:]) + "\n"
+
+
+def _json_ok(path):
+    try:
+        with open(path) as f:
+            json.load(f)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+STALL_ROUNDS = 10
+
+EDITOR_HOWTO = (
+    "As an editor you MAY include an \"edits\" array in your reply payload "
+    '(JSON: {"summary": "...", "payload": {"edits": [...]}}) with ops: '
+    '{"op":"add","text":"<one imperative, 8-200 chars>","priority":N} / '
+    '{"op":"remove","id":N} / {"op":"move","id":N,"priority":N}. The '
+    "commander executes the queue top-first. Rejections for your edits "
+    "appear in your context as editRejected notes — correct and resubmit.")
 
 # --------------------------------------------------------------- launcher glue
 

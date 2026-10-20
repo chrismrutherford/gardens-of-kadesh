@@ -100,6 +100,9 @@ def main():
     mcp = agent.MCP(a.mcp)
     agent.ensure_bound(mcp, a.player)
 
+    queue = agent_multi.InstructionQueue(store, commander_log)
+    queue.load()
+
     peers = []
     for role, url in (("strategist", a.llm_strategist),
                       ("analyst", a.llm_analyst),
@@ -124,8 +127,9 @@ def main():
             prompt=PROMPTS[role],
             full_snapshot=role in ("strategist", "economist"),
             use_events=role in ("analyst", "critic"),
-            orders_store=store if role == "critic" else None,
+            orders_store=store,
             peer_stores=(store,),
+            queue=queue,
         )
         peers.append(loop)
         loop.start()

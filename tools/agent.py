@@ -204,16 +204,33 @@ def ensure_bound(mcp, player):
 EXECUTOR_PROMPT = """You are the EXECUTOR: a fast fleet-control model for a
 Homeworld-style RTS. Big-model advisors publish directives (see Peer
 directives). Your job is mechanical enforcement, every round, in this order:
-1. PRODUCTION: any ship the directives' production plan needs but the
-   buildQueue lacks -> order_build it now (respect research prerequisites).
-2. NO IDLE SHIPS: any ship with order null in the snapshot -> task it this
-   round: harvest with ResourceCollectors, attack with warships (use dps/
-   range), guard Mothership otherwise.
+1. ECONOMY FIRST: every ResourceCollector sitting parked/docked/parade
+   gets order_harvest (nearest asteroid) BEFORE anything else — income
+   compounds; without it you lose.
+1b. EARLY LOGISTICS: before you have a ResourceController (or a second
+   collector), move the Mothership TOWARD the densest nearby resource
+   cluster (order_move to just off the patch) so collectors have short
+   trips. Once it is near the resources, KEEP IT THERE — do not move
+   it back or park it elsewhere; hold near the patch as long as it is
+   harvesting from there.
+2. PRODUCTION: any ship the directives' production plan needs but the
+   buildQueue lacks -> order_build it now. Check techTree.locked first:
+   hulls with EMPTY "missing" are disabled this match — never research or
+   build those; hulls with techs in "missing" need that research first;
+   everything else is unlocked — just build it.
+2b. NO IDLE SHIPS: a warship is idle if order is null, or verb "parade"
+   or "order?" (unparsed). Task it this round: attack with warships
+   (use dps/range), guard Mothership otherwise. Never count
+   docked/parade warships as attackers mid-defense.
 3. RESEARCH: any tech on the research path not listed researching, and
    labs free -> order_research now (E_NO_LABS -> build ResearchShip first).
-Issue exactly one tool call per round: the topmost gap not yet fixed.
-When all gaps are clear, follow the newest big-model directive (one tool
-call). Keep replies short; skip long reasoning."""
+   The tech= name MUST come from the research list in the playbook (e.g.
+   Chassis1, MassDrive1Kt) — NEVER a ship name like "ResourceCollector".
+Issue MULTIPLE tool calls per round (batch them): fix EVERY gap you
+found — harvest idlers, the build, the research — as parallel native tool
+calls in one reply. Each call gets its own result next round. Cap at 6.
+When no gaps remain, follow the newest big-model directive. Keep replies
+short; skip long reasoning."""
 
 SYSTEM_PROMPT = """You are the fleet commander AI for a Homeworld (1999-style) RTS game,
 playing one side of a real-time skirmish while a human spectates the live game window.
@@ -252,6 +269,9 @@ Research techs (exact names for order_research tech="..."):
 Research needs labs = ResearchShips in your fleet (techTree.labs in the
 snapshot). If techTree.labs == 0, NO research is possible — build a
 ResearchShip first. order_research without labs returns E_NO_LABS.
+techTree.locked ships: if "missing" lists techs → researchable, research
+those. If "missing" is EMPTY → disabled for this match/race (e.g.
+cross-race hulls) — do NOT try to research or build those.
 Combat math: each ship reports health/healthMax, dps (gun damage/sec),
 guns, range — weigh attack plans as (sum own effective dps)/(enemy
 sum dps) and retreat when the ratio turns against you. Frigates/caps
@@ -259,8 +279,8 @@ outrange corvettes: fight inside your range, outside theirs.
 If order_build is rejected with E_BAD_REQUEST, that hull's tech isn't
 researched yet — research it (needs labs).
 
-Call ONE tool per round. The tool result plus a fresh snapshot arrive next
-round. Keep commanding the fleet; when the match is over, call game_status.
+Call 1-6 tools per round as parallel native tool calls (batch independent
+actions). Each tool result arrives with the next round. Keep commanding the fleet; when the match is over, call game_status.
 
 Win condition: destroy every enemy ship (their Mothership is the anchor).
 
@@ -268,7 +288,8 @@ Strategy:
 1. Keep 2+ ResourceCollectors harvesting (order_harvest nearest asteroid).
 2. Build ResourceCollectors early, then combat ships (order_build).
 3. Attack in groups of 3+: pick ONE enemy ship id (order_attack).
-4. Keep the Mothership away from danger (order_move).
+4. Park the Mothership near the resource patch for harvester trips and
+   keep it there; protect it with a guard screen rather than moving it.
 5. Don't re-order ships already executing similar orders (see each ship's
    "order" field and the buildQueue in the snapshot).
 """
@@ -410,6 +431,66 @@ TOOL_VERB = {"order_move": "move", "order_attack": "attack",
              "order_harvest": "harvest", "order_special": "special"}
 
 
+_QUEUE_TOOLS = {"queue_done", "queue_fail"}
+
+
+def commander_queue(rnd):
+    """agent-multi hook: queue consumption for this round."""
+    import os as _os
+    import agent_multi as _am
+    d = _os.environ.get("AIPLAY_MULTI_DIR")
+    if not d:
+        return ""
+    try:
+        if merge_peer_artifacts.__dict__.get("_reset_tick", None) is not None:
+            pass
+    except Exception:
+        pass
+    try:
+        q = _am.InstructionQueue(_am.ArtifactStore(d))
+        q.load()
+        top = q.work_round(rnd)
+        return q.prompt_block() if top is not None or q.instructions else ""
+    except Exception:
+        return ""
+
+
+_queue_state = {"active_id": None}
+
+
+def commander_queue_action(name, args, result, round_no):
+    """Route pseudo-tools + order bookkeeping to the queue."""
+    import os as _os
+    import agent_multi as _am
+    d = _os.environ.get("AIPLAY_MULTI_DIR")
+    if not d:
+        return False
+    try:
+        q = _am.InstructionQueue(_am.ArtifactStore(d))
+        q.load()
+        top = q.state.get("active_ref")
+        if top is None:
+            top = q.work_round(round_no)
+        if name == "queue_done":
+            q.mark("done", note=str(result)[:120])
+            return True
+        if name == "queue_fail":
+            q.mark("failed", note=str(result)[:120])
+            return True
+        if name.startswith("order") and top is not None:
+            err = "E_" in result
+            if err:
+                q.mark("failed", note=str(result)[:120])
+            else:
+                q.note("round %d: %s %s -> %s"
+                       % (round_no, name, json.dumps(args)[:60],
+                          result[:60]))
+            return False
+    except Exception:
+        return False
+    return False
+
+
 def main():
 
     global LOGFILE
@@ -431,7 +512,10 @@ def main():
     # load the playbook (build costs + research chains extracted from game data)
     pb = ""
     try:
-        pb = open(__file__.rsplit("/", 1)[0] + "/../documentation/community/ai-playbook.md").read()
+        pbd = __file__.rsplit("/", 1)[0] + "/../documentation/community/"
+        pb = open(pbd + "ai-playbook.md").read()
+        pb += "\n\n=== SNAPSHOT DATA DICTIONARY (field + verb semantics) ===\n" \
+              + open(pbd + "ai-snapshot-dictionary.md").read()
     except OSError:
         pass  # stay lean if missing
     messages_sys = base_prompt + ("\n\n=== PLAYBOOK (authoritative game data) ===\n" + pb) if pb else base_prompt
@@ -501,6 +585,14 @@ def main():
                 log("[round %d] MATCH RESET detected (tick %d -> %d); ids regenerated"
                     % (rnd, last_tick_seen, view["tick"]))
                 next_event_idx = 0          # fresh event stream
+                try:
+                    import agent_multi as _am
+                    import os as _os
+                    _d = _os.environ.get("AIPLAY_MULTI_DIR")
+                    if _d:
+                        _am.InstructionQueue(_am.ArtifactStore(_d)).clear()
+                except Exception:
+                    pass
             last_tick_seen = max(last_tick_seen, view["tick"])
             log("[round %d] world: %s" % (rnd, world_summary(view)))
 
@@ -533,13 +625,15 @@ def main():
 
             nagline = "\n".join(due) if due else ""
             peerline = merge_peer_artifacts()
+            qblock = commander_queue(rnd)
             messages.append({
                 "role": "user",
                 "content": ("Events: " + json.dumps(fresh[:4]) + "\n"
                             + nagline + "\n"
-                            + peerline +
+                            + qblock +
+                            peerline +
                             "Snapshot:\n" + json.dumps(view) +
-                            "\nCommand the fleet (one tool call).")})
+                            "\nCommand the fleet (1-6 parallel tool calls).")})
 
             log("[round %d] reasoning+answer stream:" % rnd)
             content, calls = llm.chat_stream(messages)
@@ -553,7 +647,13 @@ def main():
                 time.sleep(a.interval)
                 continue
 
+            executed_this_round = 0
+            MAX_CALLS_PER_ROUND = 6
             for call in calls:
+                if executed_this_round >= MAX_CALLS_PER_ROUND:
+                    log("[round %d] further calls dropped (batch cap)"
+                        % rnd)
+                    break
                 name = call["name"]
                 if name not in TOOL_NAMES:
                     log("[round %d] unknown tool %s" % (rnd, name))
@@ -579,10 +679,16 @@ def main():
                     nags[0]["active"] = False      # save nag satisfied
                     nags[0]["last"] = time.time()
                     log("[round %d] save nag satisfied" % rnd)
-                result = result_text(mcp.call(name, args))
+                result = result_text(mcp.call(name, args)) \
+                    if name not in _QUEUE_TOOLS \
+                    else json.dumps({"handled": True})
+                if commander_queue_action(name, args, result, rnd) and \
+                        name in _QUEUE_TOOLS:
+                    log("[round %d] queue %s: instruction marked" % (rnd, name))
                 merge_orders_ring(name, args, result, view.get("tick", 0))
+                executed_this_round += 1
                 log("[round %d] result: %s" % (rnd, result))
-                cid = call.get("id") or f"r{rnd}"
+                cid = call.get("id") or f"r{rnd}-{executed_this_round}"
                 messages.append({
                     "role": "assistant", "content": None,
                     "tool_calls": [{"id": cid, "type": "function",

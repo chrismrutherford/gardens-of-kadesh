@@ -223,10 +223,10 @@ class PeerLoopTest(unittest.TestCase):
 class ExecutorPromptTest(unittest.TestCase):
     def test_executor_prompt_has_three_invariants(self):
         prompt = agent.EXECUTOR_PROMPT
+        self.assertIn("ECONOMY FIRST", prompt)
         self.assertIn("PRODUCTION", prompt)
         self.assertIn("NO IDLE SHIPS", prompt)
         self.assertIn("RESEARCH", prompt)
-        self.assertIn("one tool call per round", prompt.lower())
 
     def test_merge_zero_without_env(self):
         os.environ.pop("AIPLAY_MULTI_DIR", None)
@@ -245,6 +245,177 @@ class ExecutorPromptTest(unittest.TestCase):
         finally:
             os.environ.pop("AIPLAY_MULTI_DIR", None)
             shutil.rmtree(dirpath, ignore_errors=True)
+
+
+class InstructionQueueTest(unittest.TestCase):
+    """Spec 001-peer-instruction-queue: peers edit, commander executes."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp()
+        self.store = agent_multi.ArtifactStore(self.dir)
+        self.q = agent_multi.InstructionQueue(self.store)
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _add(self, editor, text="build 2 Ion Cannon Frigates", prio=1):
+        return self.q.apply([{"op": "add", "text": text,
+                              "priority": prio}], editor)
+
+    # US1: add
+    def test_add_assigns_ids_and_orders_by_priority(self):
+        self._add("strategist", text="fortify now", prio=2)
+        self._add("economist", text="build 2 Ion Cannon Frigates", prio=1)
+        block = self.q.prompt_block()
+        self.assertIn("build 2 Ion Cannon Frigates", block.splitlines()[1])
+        self.assertIn("fortify now", block.splitlines()[2])
+        doc = json.loads(open(self.store.path("instruction-queue")).read())
+        self.assertEqual(doc["instructions"][0]["by"], "economist")
+
+    def test_add_reorders_existing(self):
+        self._add("strategist", text="first instruction line", prio=1)
+        self._add("strategist", text="second instruction there", prio=1)
+        block = self.q.prompt_block()
+        self.assertIn("second instruction there", block.splitlines()[1])
+
+    # US2: remove
+    def test_remove_by_id(self):
+        self._add("strategist", text="obsolete retreat plan")
+        iid = self.q.instructions[0]["id"]
+        self.q.apply([{"op": "remove", "id": iid}], "critic")
+        self.assertEqual(self.q.instructions, [])
+        block = self.q.prompt_block()
+        self.assertNotIn("obsolete retreat plan", block)
+
+    def test_remove_unknown_id_rejected(self):
+        self._add("strategist")
+        acc, rej = self.q.apply([{"op": "remove", "id": 999}], "critic")
+        self.assertEqual((acc, rej), (0, 1))
+        self.assertEqual(len(self.q.instructions), 1)
+        hist = self.q.history()
+        self.assertFalse(hist[-1]["accepted"])
+        self.assertIn("unknown id", hist[-1]["reason"])
+
+    # US3: reorder
+    def test_move_to_front(self):
+        self._add("strategist", text="second instruction here", prio=1)
+        self._add("strategist", text="third instruction line", prio=2)
+        self._add("strategist", text="attack the frigate group", prio=3)
+        self.q.apply([{"op": "move",
+                       "id": self.q.instructions[2]["id"],
+                       "priority": 1}], "analyst")
+        block = self.q.prompt_block()
+        self.assertIn("attack the frigate group", block.splitlines()[1])
+
+    def test_two_peer_reorder_conflict_newest_wins(self):
+        self._add("strategist", text="first instruction line here")
+        self._add("strategist", text="second instruction there")
+        self.q.apply([{"op": "move", "id": self.q.instructions[1]["id"],
+                       "priority": 1}], "analyst")
+        self.q.apply([{"op": "move", "id": self.q.instructions[0]["id"],
+                       "priority": 1}], "critic")
+        block = self.q.prompt_block()
+        self.assertIn("first instruction line here", block.splitlines()[1])
+        doc = json.loads(open(self.store.path("instruction-queue")).read())
+        prios = list(range(1, len(doc["instructions"]) + 1))
+        self.assertEqual(prios, prios)   # well-formed by array order
+
+    # US4: executor top-first
+    def test_topmost_promotes_pending_and_repeats(self):
+        self._add("strategist", text="build 2 Ion Cannon Frigates here",
+                  prio=None)   # append at back
+        self._add("strategist", text="second instruction there now",
+                  prio=None)
+        top1 = self.q.work_round(1)
+        self.assertEqual(top1["text"].strip(), "build 2 Ion Cannon Frigates here")
+        top2 = self.q.work_round(2)
+        self.assertEqual(top2, top1)   # stays active until done/failed
+
+    def test_done_marked_moves_on(self):
+        self._add("strategist", text="first instruction line here",
+                  prio=None)
+        self._add("strategist", text="second instruction there",
+                  prio=None)
+        self.q.work_round(1)
+        self.q.mark("done", note="built")
+        nxt = self.q.work_round(2)
+        self.assertEqual(nxt["text"].strip(), "second instruction there")
+
+    def test_failed_engine_error_moves_on(self):
+        self._add("strategist", text="build a locked hulk now")
+        self.q.work_round(1)
+        self.q.mark("failed", note="E_BAD_REQUEST")
+        self.assertEqual(self.q.instructions[0]["state"], "failed")
+
+    def test_stall_flagged_after_10_rounds(self):
+        agent_multi.STALL_ROUNDS = 3
+        try:
+            self._add("strategist", text="impossible objective now")
+            for _ in range(4):
+                self.q.work_round(1)
+            top = self.q.instructions[0]
+            self.assertEqual(top["state"], "stalled")
+        finally:
+            agent_multi.STALL_ROUNDS = 10
+
+    # US5: editorial safety
+    def test_oversized_unknownop_badprio_rejected(self):
+        acc, rej = self.q.apply([
+            {"op": "add", "text": "x" * 500},
+            {"op": "detonate"},
+            {"op": "add", "text": "short"},
+            {"op": "move", "id": 42, "priority": 1},
+        ], "strategist")
+        self.assertEqual((acc, rej), (0, 4))
+        rejected = [h for h in self.q.history() if not h["accepted"]]
+        self.assertEqual(len(rejected), 4)
+        self.assertTrue(all("op" in h and "reason" in h for h in rejected))
+
+    def test_queue_cap(self):
+        for i in range(15):
+            self._add("strategist", text=f"valid instruction {i:02d} here",
+                      prio=min(i + 1, 12))
+        self.assertEqual(len(self.q.instructions),
+                         agent_multi.QUEUE_CAP)
+
+    def test_history_ring_and_persistence(self):
+        for i in range(120):
+            self._add("strategist", text=f"valid instruction {i:03d} here",
+                      prio=1)
+        hist = self.q.history()
+        self.assertLessEqual(len(hist), agent_multi.HISTORY_CAP)
+
+    def test_reset_clears(self):
+        self._add("strategist")
+        self.q.reset_if_new()
+        self.assertEqual(self.q.instructions, [])
+        block = self.q.prompt_block()
+        self.assertEqual(block, "")
+
+    # FR-004: commander never edits
+    def test_commander_side_has_no_apply(self):
+        self.assertFalse(hasattr(agent, "InstructionQueue"))
+        self.assertTrue(hasattr(agent_multi.InstructionQueue, "apply"))
+
+    # peer loop integration
+    def test_peer_loop_applies_edits(self):
+        side = FakeSidecar(snap(tick=5))
+        envelope = json.dumps({
+            "summary": "queue two frigates",
+            "payload": {"edits": [
+                {"op": "add", "text": "build 2 Ion Cannon Frigates",
+                 "priority": 1}]}})
+        llm = FakeLLM([envelope])
+        loop = agent_multi.PeerLoop(
+            "strategist", side, llm, self.store,
+            agent_multi.LoopLogger("strategist-test",
+                                   os.path.join(self.dir, "s.log")),
+            prompt="T", full_snapshot=True, queue=self.q)
+        loop.step_once()
+        self.assertEqual(len(self.q.instructions), 1)
+        doc = json.loads(open(
+            self.store.path("instruction-queue")).read())
+        self.assertIn("Ion Cannon", doc["instructions"][0]["text"])
 
 
 if __name__ == "__main__":

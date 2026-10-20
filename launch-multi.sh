@@ -19,10 +19,11 @@ EXTRA=()
 while [[ $# -gt 0 ]]; do
     case "$1" in
         latest)
-            SAVE="$(ls -t "${HOME}/.homeworld/SavedGames/MultiPlayer/" \
-                "${HOME}/.homeworld/SavedGames/SinglePlayer/" 2>/dev/null \
-                | grep -v '^$' | head -1)"
-            [[ -z "$SAVE" ]] && { echo "launch-multi.sh: no savegames found" >&2; exit 1; }
+            SAVE="$( (ls -t "${HOME}/.homeworld/SavedGames/MultiPlayer/"/* \
+                      "${HOME}/.homeworld/SavedGames/SinglePlayer/"/* 2>/dev/null) \
+                    | head -1)"
+            SAVE="$(basename "$SAVE")"
+            [[ "$SAVE" == ":" || -z "$SAVE" ]] && { echo "launch-multi.sh: no savegames found" >&2; exit 1; }
             echo "launch-multi: latest save '$SAVE'"
             shift ;;
         *) SAVE="${SAVE:+$SAVE }$1"; shift ;;

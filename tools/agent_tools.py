@@ -130,6 +130,18 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "name": {"type": "string", "description": "savegame name (agent auto-names it: autosave-<epoch seconds>)"}}}}},
     {"type": "function", "function": {
+        "name": "queue_done",
+        "description": "Mark the current instruction-queue directive COMPLETED "
+                       "(done when the queue's top instruction is achieved)",
+        "parameters": {"type": "object", "properties": {
+            "id": {"type": "integer"}}}}},
+    {"type": "function", "function": {
+        "name": "queue_fail",
+        "description": "Mark the current instruction-queue directive IMPOSSIBLE "
+                       "(e.g. locked hull, engine E_* errors persist)",
+        "parameters": {"type": "object", "properties": {
+            "id": {"type": "integer"}}}}},
+    {"type": "function", "function": {
         "name": "step",
         "description": "Advance N ticks while paused",
         "parameters": {"type": "object", "properties": {
