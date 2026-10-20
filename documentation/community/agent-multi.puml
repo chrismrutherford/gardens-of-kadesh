@@ -1,0 +1,72 @@
+@startuml agent-multi
+title agent-multi: 4B executor + 4 big-model peers (spec 001-agent-multi-llm-fleet)
+
+skinparam componentStyle rectangle
+skinparam ActorStyle awesome
+
+actor "Human\nspectator" as Human
+
+rectangle "Game Engine (GoK build)" as Engine {
+  component "AI-Play layer\nsrc/AIPlay/" as AIPlay
+}
+
+component "MCP sidecar\n:8302/mcp\n(aiplay_mcp.py)" as Sidecar
+
+rectangle "tools/agent-multi.py\n(one process, 5 loops)" as Multi {
+
+  component "COMMANDER (executor)\n4B: 192.168.1.106:9931\nEXECUTOR_PROMPT:\n 1 builds in progress\n 2 no idle ships\n 3 research in progress" as CC
+  component "STRATEGIST\npeer :9931\nplan/research/attack" as PS
+  component "ANALYST\npeer :9932\nbattle-event reactions" as PA
+  component "ECONOMIST\npeer :9933\nproduction plan" as PE
+  component "CRITIC\npeer :9934\norders objections" as PC
+}
+
+database "/tmp/aiplay-multi-<id>/" as Store {
+  file "strategist.json" as A1
+  file "economist.json" as A2
+  file "analyst.json" as A3
+  file "critic.json" as A4
+  file "orders.json\n(last 20 orders)" as A5
+}
+
+cloud "Big LLM servers\n192.168.2.72:9931-9934\n(cache-reuse + swa-full)" as LLMs
+cloud "4B executor\n192.168.1.106:9931" as L0
+
+Human --> CC : watches game window\n(Caps Lock overlay)
+
+' commander round pipeline
+CC --> Sidecar : observe (snapshot)\n+ get_events + save_game
+Sidecar --> AIPlay : UDS /tmp/homeworld-aiplay.sock
+AIPlay --> CC : snapshot (tick/fleet/buildQueue/\nresearch/techTree/dps-range) + events + autosave events
+
+CC --> L0 : round prompt =\nEXECUTOR_PROMPT + peer merge\n+ snapshot + nags
+L0 --> CC : 1 tool call\n(order_*/save_game)
+CC --> Sidecar : order_*</save_game>\n(sole binder+orderer)
+
+CC --> A5 : append order ring
+CC --> Store : read peer artifacts\n(freshness <= 60s, zero LLM cost)
+
+PS --> A1 : publish artifact (atomic replace)
+PE --> A2 : publish production plan
+PA --> A3 : publish reactions
+PC --> A4 : publish objections
+A5 --> PC : recent orders
+A1 --> PC : plan to review
+A1 --> CC : directives
+A2 --> CC : production plan
+A3 --> CC : threat reactions
+A4 --> CC : objections (advisory)
+
+PS --> LLMs : chat (no tools array)\nfull snapshot, rolling ctx
+PA --> LLMs : chat (compressed view + events)
+PE --> LLMs : chat (full snapshot + techTree)
+PC --> LLMs : chat (orders + peer artifacts)
+
+note right of Multi
+  Reset rebase: tick decreases -> all loops
+  clear context (FR-007). Match over ->
+  peers idle with summary (30s poll).
+  Peer errors -> backoff 1s..30s, never
+  blocks the commander (US1).
+end note
+@enduml

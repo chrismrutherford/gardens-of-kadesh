@@ -1,0 +1,344 @@
+
+Skip to main content
+[Competitive] General Strategy Tips for Multiplayer : r/homeworld
+Advertise on Reddit
+Create
+Create post
+Open inbox
+Skip to Navigation
+Skip to Right Sidebar
+Go to homeworld
+r/homeworld
+•
+12y ago
+u/Gifted_SiRe
+[Competitive] General Strategy Tips for Multiplayer
+
+Hey guys, one of my friends wanted to learn how to play the game, so I wrote this up. I posted it in another thread but figured you guys might like it. This isn't really for the people who just want to play and mess about, but for people who really want to push the gameplay to its limits and win more games. If this isn't you, that's perfectly fine, I love that games can be played lots of different ways for different people! Keep in mind this is my summed experience so far with 30+ games, and loads more experience in other RTS but if you disagree with something please let me know!
+
+Bad Habits
+
+The Homeworld Remastered single player game teaches bad habits with respect to resourcing and unit management. The central axis of any real time strategy game is the rapid acquisition and judicious expenditure of resources towards accomplishing your goals. The single player game teaches you to settle for 2-5 harvesters and punishes you for producing massive fleets by making the AI ship production scale with you. Also since the enemy AI seems to be able to ignore resources, there is little or no tactical value in attacking your opponents' resources in single player.
+
+Another bad habit you can learn from the AI is that there's really no punishment for having a large fleet and sitting on it, when in reality, your fleet is almost always better served actively attacking enemy production/resourcing or actively defending vulnerable areas. Do not think that you will win by merely turtling up and teching or by spamming fighters. Victory comes through nuanced understanding of the economic/logistic game and knowledge of the counter systems in place.
+
+Race Selection
+
+This is a competitive guide. For this reason I cannot recommend enough that you DO NOT play Kushan or Taiidani in multiplayer in Homeworld Remastered. Their forces are vastly inferior in terms of firepower, AI, cost, research, harvesting efficiency, production ability... the list goes on. There are virtually no advantages whatsoever to playing Kush or Taiidani. The only one advantage I can think of is HW1 gravity wells possibly being able to stop a Vagyr strike craft rush, and even that's a stretch due the research time involved. DO NOT play Kushan or Taiidani if you want to win games.
+
+Resourcing
+
+In Homeworld: Remastered, most maps have resources concentrated into focused nodes with a few valid attach points for harvesters (Iron Curtain is an exception). This means there is a saturation point for workers and a good incentive to spread out your resource dropoffs. Furthermore, resource dropoffs can themselves often be a limiting resource if enough resource collectors are active in an area. For these reasons, getting an early Mobile Refinery or two is almost always a very good idea.
+
+I feel that every strategy (even a rush) is made better with the addition of at least 1 refinery and about 11-14 resource collectors, which can saturate 3 asteroid areas satisfactorily. That said, always adapt your resourcing to your map, as there are a few that are very strange (Iron Curtain, Hyperspace Arena, a few others maybe).
+
+With normal resources, I like to start by building 2-3 resource collector at each of my ships, and a research module on my Mothership. I immediately send my carrier to the second nearest resource area. Next I build a Mobile Refinery at whichever ship is nearest to another 'safe' resource node. I then build about 1-3 more resource collectors each from my starting production for a minimum of 11 Resource Collectors. Depending on how small the map is, I will build my first scout sooner. Only once I have my economy online (probably 3-5 minutes in) will I start building towards actual unit production.
+
+Force Allocation
+
+I prefer not to keep any forces anywhere they aren't needed. This includes even having them at all if I have good scouting info on my opponents. The strongest units in the game are scouts and probes because they can tell you what kind of composition you need to build to counter your opponents, as well as whether or not you can get away with expanding economically. Don't forget you can look at what modules your opponents' Carriers and Motherships have, to let you know what they're doing (and if they're playing Kushan or Taiidani you've already won). Here is my general strategy:
+
+    If I see my opponent isn't building anything much in particular I can focus on getting my economy up and running and then later in the game I can win by out-spending them with mass production. In these cases I look for safe places to expand, gradually build up my research, and build a totally balanced force, while aggressively scouting my opponent's space. This is my default response most of the time.
+
+    If they appear to be going for an economic boom, and happen to choose a resource node relatively close to me, I will attempt to build enough forces (this will primarily be fighters and corvettes) to rush it down and shut it off ASAP. I will probably research speed upgrades for those units so I can retreat quickly back to my space after making strikes, this also gives the benefit of allowing me to respond more quickly to enemy attacks on my own economy. Keep in mind though there is a critical mass of force needed to overwhelm standard Resource Refinery defenses (don't expect to win with just 2 groups of Assault Craft/Interceptors).
+
+    If I see a respectable number of fighters and/or corvettes (especially if they're Vaygr) I will immediately cut all non-counter-centric research and economic growth and begin building forces to counter their fleet, including platforms if necessary. The strongest rush in the game I'm familiar with is a Vagyr Strikecraft rush with Command Corvettes to reinforce.
+
+Generally though, once you know where your opponents forces are and what they're composed of, it's trivial to position your forces effectively to prevent damage. Build scouts and probes.
+
+Research
+
+This diverges pretty significantly between Higgs and Vagyr. Obviously certain research is necessary to even build certain ships, but another question is "Are ship upgrades worth it?" I think they are, especially if you're about to go into an action or foresee one coming soon. The tech upgrades take more time relative to the unit/class stat upgrades, and some of the individual stat upgrades come very very quick, so it's OK to wait for 'just in time delivery' of upgrades.
+
+But it's important to have a sufficient number of a unit before bothering with upgrades. There's obviously a crossover point somewhere, so I think it's better to get the units first then get upgrades just before they're needed. Again, scouting helps a lot with this. Don't forget to check their modules.
+
+Tactics, Formations, and Control Groups
+
+I generally don't use tactics or formations because I usually don't need them. Fighters and corvettes will just break and do their own things as soon as they get close enough anyways, and frig/capital AI is good enough to stay out of eachothers' way. There's no AOE damage effects that are relevant at the capital ship level anyways (I wish there were).
+
+There is a notable drawback that units in formation will only move at the speed of the slowest ship until they generally engage (and then go back to their normal AI) meaning you can get badly outmaneuvered by faster ship classes. There could be an advantage if it's the differences between sending your forces in all together rather than allowing your forces to be killed of piecemeal, but this should be something you can control for.
+
+That said, I sometimes keep a small group of fighters/corvettes on another hotkey when I'm attacking to pick off priority targets like Vagyr Command Corvettes, Infiltrator/Marine frigs, important subsystems like Fire Control Towers, Gravity Wells, or Engines. Additionally I aggressively use strike craft groups to attack resource collectors that stray into my territory (which is usually the whole map since I'm scouting and expanding so much), or enemy scouts/probes I find.
+
+Information Warfare
+
+So I said earlier that scouts and probes are the best units in the game. They let you know what's coming and what to build, where it is safe to expand and where you can safely attack. The same holds true for enemy scouting, and therefore it is important to persecute enemy intel activity at every turn. I continuously move my scouts around using waypoints manual control when necessary to ensure a constant stream of information for myself, as well as to spot enemy scouts/probes in my own space.
+
+Another good tip is to build an Advanced Sensors Array on your forward most Carrier and Flagship. This way, if an enemy sends a Scout/Probe early on, you will probably be able to see it and kill it, preventing them from scouting your forces/tech/production.
+
+I don't really know how effective Sensors Distortion Probes are yet, but my understanding is they work like dust clouds in allowing your cloak view of your ships or reduce sight range of enemy ships. So far I haven't seen much use for cloak/anti-cloak tech because unlike in Starcraft, a ship that is cloaked reveals itself for an extended period of time when it fires, and so it represents no real threat of immunity from damage.
+
+Some Other Tips
+
+    Fire Control Towers and Vagyr Command Corvettes win games.
+
+    If you're winning, build Gravity Wells. One of the only ways to lose from a winning position is to have a surprise battlecruiser warp-in and kill your flagship and/or carriers/shipyards. This also means if you're looking for a quick win, warping in a Battlecruiser with a Fire Control Tower and Gravity Well is a great way to do it.
+
+    Vagyr Carriers are really cheap compared to Higg carriers.
+
+    I need to do more experiments with them, but some small number of scouts with EMP seem really, really useful for their price.
+
+    Plan your build order in advance, but make it adaptable depending on battlefield conditions.
+
+43
+Sort by:
+Comments Section
+u/Gopherlad avatar
+Gopherlad
+•
+12y ago
+• Edited 12y ago
+
+For the sake of argument, let's say I want to play a HW1 race. What are my options? Because I've been having some success against HW2 races using kamikaze-scouts on their resourcers early on, for example. Takes 3 to guarantee a kill.
+
+Edit: Shit...if this becomes mainstream and isn't fixed soon multi is going to suck.
+5
+u/Gifted_SiRe avatar
+Gifted_SiRe
+OP •
+12y ago
+• Edited 12y ago
+
+Kamikaze
+
+WOW. I think you may have discovered the micro in this game. I'll probably write this up better and make it its own thread.
+
+I just did some tests and I've got to say... I'm kind of depressed by this. I had never thought to try kamikaze with Scouts (only with Interceptors and such) and I would be lying if I didn't say this is probably the single most compelling reason I've seen to play the HW1 races. It was interesting when I first heard it. But seeing it in action...
+
+My Data
+
+    It appears kamikaze attacks do a good amount of immediate damage, then against heavier units, generate a DOT effect that damages the target over the next ~1-2 seconds. This effect does not stack. In other words, its actually better to kamikaze your forces piecemeal rather than all at once (even more benefit for HW1).
+
+    With HW1 Kamikazes, it takes 4 Scouts (attacking piecemeal to maximize the DOT damage) to kill a HW1 Resource Collector almost exactly. Therefore, I'll estimate that the initial Kamikaze does about 1200 damage and adds about 300 damage over the next 1.5 seconds or so. HW2 RC's actually only have 2000 Armor. It seems as long as they hit, just 2 (!) HW1 scout direct hits guarantee a kill on a HW2 RC.
+
+    Interestingly, it appears there actually is a collision check, or possibly some kind of line of sight check after the Kamikaze 'hits' and before damage is dealt. Sometimes it's possible for a kamikaze to actually hit an asteroid or a resource drop-off instead of the target. This is especially notable when an RC is dropping off resources at the mothership, where they become virtually invulnerable. In these cases it appears neither the target nor the larger ship takes any damage.
+
+    The HW2 race scouts usually take 2 whole squads to kill a HW1 Resource collector. With a perfect hit from all 3 ships, it only takes 1 squad of scouts from HW2 ships to kill an RC. Unfortunately, the squad AI in Homeworld 2 ships seems to seriously interfere with their ability to accurately hit with Kamikaze attacks. I'd say success rates are about half what they are with HW2 races.
+
+Additionally, and I don't have any real, definitive data on this (and again it may just be a superstition I've developed over the last hour of testing) but it appears that while your units are on a kamikaze run, attacks against them gain boosted accuracy.
+
+Analysis
+
+So what's the tactical value of this?
+
+    To be able to totally kill someone's resourcing is a very serious threat.
+
+    A HW2 resourcer costs 400 RU and killing it with Scout Kamikaze costs 180 RU.
+
+    My experience with other RTS games have taught me that depending on production rules and income rates, it may be worthwhile to pay as much as three times the cost of a miner in assault forces to kill one enemy miner.
+
+    Even if no defensive force is left behind in the aftermath, being able to totally deplete someone's income this quickly means you will have free reign to develop. As long as the rest of your race isn't totally gimped, the option for effective Kamikaze is very strong.
+
+Unfortunately at this point I don't know for sure whether the HW1 or HW2 races as a whole are superior (believe it or not, this may be strong enough to make HW1 races the better race). But if scout kamikaze becomes the entire meta (which I suspect it actually could) then there are much bigger problem with the game than balance.
+
+UPDATE:
+
+After doing some more testing and about 10 test games against actual human players, it seems the threat of the all-kamikaze meta is not as serious as I thought. As I hoped, a variety of factors play against using kamikaze scout spam as being an optimal strategy.
+
+    First of all it is possible for large numbers of units in relatively close proximity (laterally or vertically, referencing the target) to converge and self-destruct/collide before reaching the target, sometimes very small distances away from the target. If you are going to use kamikaze tactics, do so with small numbers of craft at a time, it is much more effective than using waves.
+
+    Second, in games against real humans, usually the eventual defenses that get built up are gradually enough to seriously blunt piecemeal fighter attacks. With good intel (ironic considering its a scout rush) it's possible to interdict kamikaze scouts. HW1 races can use Defenders in low numbers to completely annihilate piecemeal scout attacks, or in larger numbers to stop even wave attacks. Higgs can use Interceptors and Gunships and Vaygr can use Assault Craft and Missile Corvettes, all while building up a powerful assault. You can counter Platforms and Frigates with Kamikaze, but not other strike-craft.
+
+    Third, unless you deal an absolutely crippling blow to the opponent's economy, it is likely that it will result in a very similar end-game to most battles against the HW1 races, albeit slightly later. Even if you develop Gravity Wells to stop their likely counter-strikes with their fleet forces, eventually their endgame unit quality, tech and production will kill you.
+
+    Fourth, even if scout kamikaze strategy were stronger, and ignoring the above, it is possible to use a larger map size to weaken the power of kamikazi strategy. Just don't spawn in close positions on Iron Curtain. Also, adjusting starting resources upwards, adding resource injections, or upping resource multiplier could help curb kamikaze strategies if they became a problem.
+
+    Last, contrary to a thread I've seen on HW1 frontpage, it shouldn't be possible to kill someone's Mothership or Carrier outright with Scout Spam. It would take tens of minutes and probably between 200 and 300 scouts to kill a Mothership, and assuming they still have a functioning economy it would eventually become impossible to use kamikaze effectively.
+
+5
+u/internet-arbiter avatar
+internet-arbiter
+•
+12y ago
+
+I was laughing all the last 2 days as people were saying scouts were useless.
+
+Scouts are fucking awesome.
+
+And carriers and the mothership can both produce 2 different ships at a time so while their capital ship production rate isn't as good their ship production has its advantages.
+
+Also gravity well generators are a big middle finger.
+
+The major drawback is capital ship combat. Hiigarans in particular get battlecruisers shooting those red plasma balls of death.
+
+I pretty much always gravitate to the faction people think are gimp but they do have their moments. They have a far greater production rate on frigates, corvettes, and fighters but slower on destroyers and their heavy cruiser isnt as good.
+
+But i love having a triple carrier group full of defenders, multi/heavy corvettes, and bombers hyperspacing to the edge of fights.
+2
+u/irnec avatar
+irnec
+•
+12y ago
+
+Red plasma balls are Vagyr, Hiigarans have pretty blue beams.
+7
+[deleted]
+•
+12y ago
+
+That is delightfully morbid.
+1
+u/Yotempole avatar
+Yotempole
+•
+12y ago
+
+What are the advantages to having fire control towers and Vaygr command corvettes. You stress that they are very important but do not say why.
+4
+u/MarikBentusi avatar
+MarikBentusi
+•
+12y ago
+
+AoE accuracy boost if I recall correctly
+7
+u/Teslatic avatar
+Teslatic
+•
+12y ago
+
+I love this. MP is how I enjoyed the originals most, so it's why I picked up HW:R. However, I'm extremely bummed at the current MP situation. I get that it's beta, and there is balancing to do, but I haven't heard much about them improving the overall experience. We have a relatively broken server browser, and I DO expect them to fix that- but what about auto-matchmaking, ranking/ladder, etc? I'm more pessimistic about them adding that, but I really hope I'm wrong.
+
+A HW:R with proper MP would be the most incredible thing ever, IMO.
+4
+u/Tokamak_The_Reactor avatar
+Tokamak_The_Reactor
+•
+12y ago
+
+I wish I could pick up my copy and play multiplayer a lot so I could help with the beta... sadly, I'm facing final exams soon.
+
+IMO, I think that balance is the most important, especially between HW1 and HW2 races. Once the balance is set and the game's competetive, the MP structure comes to the focus, and to be honest, it might be a bit hard to implement working matchmaking while the game used to be focused on lobbies, but I have high hopes since steamworks can work with a big enough player base. However, if the game is just good enough, people might not mind the lack of matchmaking.
+3
+InactiveJumper
+•
+12y ago
+emoji:HII-Flair:
+
+Interesting, I've been playing multiplayer as Taiidan (admittedly only one against other players) and in a match, the Taii and Kushan should be able to outproduce Hiigaran and Vaygr late game as T and K have two production lines per ship, with H and V only having one.
+4
+u/Gopherlad avatar
+Gopherlad
+•
+12y ago
+
+Except that T and K don't get shipyards, and therefore are limited to 2 supercap production lines.
+3
+InactiveJumper
+•
+12y ago
+emoji:HII-Flair:
+
+Right, as is V and H if only one shipyard. If you let your opponent call in TWO shipyards and get the other up and putting out supercaps, well...
+3
+[deleted]
+•
+12y ago
+
+Do you have any specific tips for unit counters and what ships to build/ignore? Are things still intact from Classic?
+3
+u/Gifted_SiRe avatar
+Gifted_SiRe
+OP •
+12y ago
+• Edited 12y ago
+
+Homeworld 2 units are exactly identical to how they were in HW2 1.1 patch. For info on what counters what, the mouse-over tooltips on the units are very helpful. I suggest ignoring Platforms typically, as they aren't enough better than other units on a per-cost basis to justify being totally immobile after launch.
+
+Vaygr fighters are generally better than their Hiigaran counterparts on a per cost basis, while Higg corvettes are slightly stronger than Vaygr corvettes. As Vaygr I recommend early aggression and efforts to build up a critical mass of strikecraft along with upgrades to control resourcing. It's good to note that Flak Frigates are very strong against fighters, but surprisingly not that great against Corvettes. And the inverse is true for Torpedo Frigates.
+
+For that reason, as Higgs, be careful if trying to counter Vagyr ships with Frigates alone, you will need to carefully mix Torp and Flak Frigates (unfortunately this just comes with experience and reading the enemy composition). You should definitely try to mix in some gunships and fighters whenever possible. As you get closer and closer to the late-game I feel Higgs become the better race as their production versatility, generally better capital ships, and cheaper hyperspacing give them a better late-game.
+5
+fluency
+•
+12y ago
+
+What can be done balance wise to make the HW1 races competitive without significantly altering their core gameplay features?
+2
+u/Gifted_SiRe avatar
+Gifted_SiRe
+OP •
+12y ago
+
+A lot, probably. I'm not an expert in modding or how exactly this game is programmed, but I understand they did a really shitty job designing the unit AI scripts for the HW1 units. My understanding is some of them are straight copy-pastes of HW2 unit AI scripts, which are totally inappropriate for the unit as a whole.
+
+Beyond that the concept of 'balance' is very complex, and I wish the vocabulary for it was a bit deeper. During various points in Starcraft II's history, the game has been what I would regard as completely out of balance, despite the fact that racial win rates at every skill level might be exactly 33%.
+
+On one patch in particular, many people challenged the devs' assertion that the TvZ matchup was exactly 50-50. In fact, when the devs provided large-scale data dumps, the players confirmed that it was true. However many players took offense with something else related to balance. If you analyzed the data, looking at who wins vs. game length, it became clear that Terran were only good in the early game and Zerg were only good in the late game. And yet they still generally had a 50-50 balance between the races.
+
+Large numbers of small adjustments to unit AI and base stats would probably be sufficient to bit might lead to less interesting gameplay, or these types of time-gated imbalances. A more interesting question to me is whether it would be worthwhile to intentionally try to create more dynamism between the races by making the Taiidani and Kushan 'equivalent' units' differences more dramatic.
+4
+fluency
+•
+12y ago
+
+Interesting thoughts.
+1
+[deleted]
+•
+12y ago
+
+Interceptors seem pretty useless, i've had a lot of success with doing Vaygar Corvette rushes especially because you can out micro and kite the shit out of most forces with the missile corvettes. Hiigara doesn't seem to have any great counters, pulsar corvettes are alright at it but torpedo frigates lose badly to corvettes because they take so much longer to build. i've yet to see a real point in building frigates when bombers and corvettes just do their job so much better.
+2
+[deleted]
+•
+12y ago
+• Edited 12y ago
+
+First MP match I played, I got utterly rushed by Vayger corvettes and missile corvettes... they wiped out most of my Hig fighters and bombers even though I outnumbered them.
+
+I don't think I'm going to enjoy online multiplayer...
+
+EDIT: WHOA. Just tested the missile corvettes. They decimate everything.
+2
+[deleted]
+•
+12y ago
+
+I have been done ng well with the Kushan with 30 plus games. They get out assaults frigs fast and supports repair ability and fight repairing is amazing. You can make balls of death that are self sustaining. They also deal with higg and vaygar strike craft much better and have so many options to do such.
+1
+u/Hobietime avatar
+Hobietime
+•
+12y ago
+
+Just ran into a guy with an interesting strategy.
+
+He was playing V and kept all of his ships docked in his carrier. He then dangled it in the center of the map. The moment I engaged his forces popped out and crushed my light corvettes with a bunch of V assault fighters.
+1
+na85
+•
+12y ago
+
+Haven't got the game yet, but:
+
+Is the so-called MVB rush still viable for Hiigaran players? Hiigaran early advanced frigates -> cloak module on carrier, tech straight to flak frigates with level 2 armor and then steal your way to a larger fleet with marine frigates?
+
+As I recall, massed flak frigates with level 2 armor will shred anything in HW2 1.1, even battlecruisers with good micro.
+1
+u/CButler89 avatar
+CButler89
+•
+2y ago
+
+The kamikaze thing is well known. We always played with the rule that using kamikaze counts as a loss. If you want to know why take a max count scout and interceptor group and kami the mothership.
+1
+Community Info Section
+r/homeworld
+Homeworld
+Homeworld.
+Created Dec 11, 2009
+Public
+5.4K Weekly visitors
+150 Weekly contributions
+User flair
+u/lolzinventor avatar
+lolzinventor
+
+    Reddit Rules
+    Privacy Policy
+    User Agreement
+    Accessibility
+    Reddit, Inc. © 2026. All rights reserved.
+
+

@@ -1,0 +1,48 @@
+@startuml agent-multi-infoflow
+title agent-multi — information flow (who feeds whom, per round)
+skinparam participantPadding 5
+skinparam ArrowColor #444444
+skinparam sequenceMessageAlign center
+
+actor "Human" as H
+participant "Game Engine\n+ sidecar :8302" as GAME
+participant "LLM servers\n:9931..:9934" as LLM
+participant "Strategist" as S
+participant "Economist" as E
+participant "Analyst" as A
+participant "Critic" as C
+participant "strategist.json\neconomist.json\nanalyst.json\ncritic.json" as FS
+participant "COMMANDER\n(4B executor)" as CMD
+database "orders.json" as ORD
+
+== continuously, each at its own pace ==
+
+GAME -> S : observe (full snapshot)
+LLM  -> S : plan (research path,\nfleet comp, attack timing)
+S -> FS : strategist.json\n{directives}
+
+GAME -> E : observe + techTree
+LLM  -> E : production plan (build q, harvest routes)
+E -> FS : economist.json {buildQueue, directives}
+
+GAME -> A : observe (compressed) + fresh events
+LLM  -> A : threat reactions
+A -> FS : analyst.json {reactions}
+
+FS  -> C : strategist/economist artifacts\n+ orders.json
+GAME -> C : compressed snapshot + events (critic cycle)
+LLM  -> C : objections
+C -> FS : critic.json {objections, advice}
+
+== every ~1s: commander round (sole binder/orderer) ==
+
+GAME -> CMD : observe + get_events
+FS  -> CMD : read all 4 artifacts\n(drop stale > 60s) - zero LLM cost
+CMD -> LLM : executor prompt + peer directives\n+ snapshot (1 round, 1 tool call)
+LLM -> CMD : order_* / save_game
+CMD -> GAME : enforce: builds queued / no idle ships /\nresearch in progress
+CMD -> ORD : append order ring
+ORD -> C : (next critic cycle)
+
+CMD --> H : game window + /tmp/aiplay-agent.log
+@enduml
