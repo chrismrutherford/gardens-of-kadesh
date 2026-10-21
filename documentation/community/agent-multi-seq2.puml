@@ -1,0 +1,72 @@
+@startuml agent-multi-seq2
+title agent-multi — round sequence (per-advisor queues, standing/task, critic arbitration)
+skinparam sequenceMessageAlign center
+skinparam ArrowColor #444444
+skinparam ParticipantPadding 4
+skinparam BoxPadding 6
+
+actor "Human" as H
+box "fleet process" #F8F8F8
+participant "COMMANDER\n(4B executor)" as CMD
+participant "strategist loop" as S
+participant "analyst loop" as A
+participant "economist loop" as E
+participant "critic loop" as C
+end box
+participant "engine (UDS)" as ENG
+participant "LLM servers\n(.106:9931 cmd\n.72:9931-4 peers)" as LLM
+database "session dir\nartifacts + per-role queues" as FS
+
+== peer loops (each: continuous back-to-back) ==
+
+loop every round, per peer
+  ENG -> S : observe (+techTree)
+  FS -> S : own queue + orders +\nother queues (critic only)
+  LLM -> S : streamed reasoning\n(→ role log, live)
+  S -> FS : artifact (directives) +\nqueue edits (add/remove/move)
+end
+
+note right of FS
+  Each editor owns ONE queue:
+  instructions typed standing (always-on)
+  or task (worked to completion).
+  Edits validated; rejections fed back
+  to the editor's context.
+end note
+
+loop every round, per peer (analyst/economist/critic cadence)
+  ENG -> A : compressed snapshot + fresh events
+  LLM -> A : reactions
+  A -> FS : analyst.json + analyst-queue edits
+end
+
+== commander round (~1s cadence) ==
+
+ENG -> CMD : observe (full snapshot,\nmatchStatus.boundPlayerIndex)
+CMD -> CMD : UNBOUND? → rebind
+FS -> CMD : all 4 queues (QUEUE pickup line\n→ commander log) + peer artifacts\n+ events + nags
+CMD -> LLM : executor prompt + queues\n+ snapshot (old ones elided to\nworld-summary; 1-6 tool calls)
+LLM -> CMD : batch tools: order_*/save/queue_done/queue_fail
+CMD -> ENG : dispatch (sole binder;\ndedupe: ships-already-executing +\nrecent-identical window)
+ENG -> CMD : results (per call)
+CMD -> FS : orders.json ring + task notes\n(errors NOTED, not fatal)
+CMD -> H : fleet view + /tmp/aiplay-agent.log
+
+== arbitration: commander can't do it all ==
+
+FS -> C : queues + orders + snapshot
+LLM -> C : "MOST IMPORTANT task overall"
+C -> FS : move/remove edits + artifacts
+
+== anomalies ==
+alt match reset / game restart
+  CMD -> CMD : tick decrease or\nboundPlayerIndex=-1
+  CMD -> ENG : bind_sessions ALL queues cleared
+end
+alt peer crash / server down
+  S -> S : backoff 1s..30s, keep last artifact,\ncommander unaffected (staleness 60s)
+end
+alt context overflow (HTTP 400)
+  CMD -> LLM : retry with trimmed history\n(old snapshots elided)
+end
+@enduml

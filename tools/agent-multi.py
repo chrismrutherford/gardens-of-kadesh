@@ -129,7 +129,7 @@ def main():
             logger=agent_multi.LoopLogger(
                 role, "%s/%s.log" % (logdir, role)),
             prompt=PROMPTS[role],
-            full_snapshot=role in ("strategist", "economist"),
+            full_snapshot=role in ("strategist", "economist", "analyst"),
             use_events=role in ("analyst", "critic"),
             orders_store=store,
             peer_stores=(store,),

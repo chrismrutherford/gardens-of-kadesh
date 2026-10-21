@@ -43,7 +43,8 @@ cd "$(dirname "$0")"
 if [[ -n "$MCPPORT" ]]; then
     setsid nohup python3 tools/aiplay_mcp.py --port "$MCPPORT" \
         >/tmp/aiplay-mcp.log 2>&1 < /dev/null & disown
-    echo "aiplay-mcp: http://127.0.0.1:$MCPPORT/mcp"
+    echo $! > /tmp/gok-mcp.pid
+    echo "aiplay-mcp: http://127.0.0.1:$MCPPORT/mcp (pid $(cat /tmp/gok-mcp.pid))"
 fi
 
 # /aiPlay enables the layer; auto-skips all cinematics in spectating mode.
@@ -69,4 +70,5 @@ rm -f /tmp/aiplay-game.log
 ln -s "$GAMELOG" /tmp/aiplay-game.log
 setsid nohup env HW_Data="$HW_DATA" "$BIN" "${ARGS[@]}" \
     >"$GAMELOG" 2>&1 < /dev/null & disown
-echo "launched; game log $GAMELOG (current: /tmp/aiplay-game.log); socket /tmp/homeworld-aiplay.sock (~10s)"
+echo $! > /tmp/gok-game.pid
+echo "launched; pid $(cat /tmp/gok-game.pid); log $GAMELOG (current: /tmp/aiplay-game.log); socket /tmp/homeworld-aiplay.sock (~10s)"

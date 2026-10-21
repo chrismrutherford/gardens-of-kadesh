@@ -47,4 +47,5 @@ done
 pkill -f 'tools/agent-multi.py' 2>/dev/null || true
 setsid nohup python3 tools/agent-multi.py \
     >/tmp/agent-multi.out 2>&1 </dev/null & disown
-echo "launch-multi: fleet up; logs under /tmp/aiplay-multi-*, commander telemetry /tmp/aiplay-agent.log"
+echo $! > /tmp/gok-fleet.pid
+echo "launch-multi: fleet up (pid $(cat /tmp/gok-fleet.pid)); pids in /tmp/gok-{game,mcp,fleet}.pid"

@@ -1,0 +1,72 @@
+@startuml agent-multi-arch2
+title agent-multi architecture (current state: executor + 4 peer editors + per-role queues)
+
+skinparam componentStyle rectangle
+skinparam ArrowColor #444444
+skinparam rectangleBackgroundColor #FFFFFF
+skinparam noteBackgroundColor #FFFFE0
+
+actor "Human\nspectator" as H
+
+package "Game Engine (GoK)" as ENG {
+  component "AI-Play layer\nsrc/AIPlay\nUDS socket" as AIP
+}
+
+component "MCP sidecar\n:8302/mcp\nstructured relays" as SC
+
+package "tools/ (one process)" as FLEET {
+
+  package "COMMANDER loop\n(gemma-4-26B-A4B executor\n192.168.1.106:9931)" as CMD {
+    component "round pipeline\nobserve -> queue ->\nbatch 1-6 tool calls\n(+dedupe/ships-already-\nexecuting)" as RP
+  }
+
+  package "PEER loops (big models\n192.168.2.72:9931-9934\nstreamed reasoning logs)" as PEERS {
+    component "strategist\nplan/research path" as S
+    component "analyst\nevents/reactions" as A
+    component "economist\nproduction" as E
+    component "critic\narbitration" as C
+  }
+}
+
+database "session dir\n/tmp/aiplay-multi-<id>/" as ART {
+  file "rounds-<role>.jsonl\n(one line per round)" as JSONL
+  file "strategist.json / economist /\nanalyst.json / critic.json\n(summary + directives)" as ARTS
+  file "orders.json\n(commander ring)" as ORD
+  file "instruction-queue-<role>.json\n(standing|task, per advisor)" as QS
+  file "instruction-history-<role>.json" as HI
+}
+
+cloud "4x llama.cpp\ncache-reuse + swa-full" as LLM
+
+H --> CMD : watches window
+CMD --> AIP : orders (sole binder)\nobsaves + observe
+AIP --> CMD : snapshots + events
+
+S --> ARTS : artifact (summary+directives)
+E --> ARTS : artifact
+A --> ARTS : artifact (reactions)
+C --> ARTS : artifact (objections/advice)
+
+PEERS --> ARTS : their OWN queue edits\n(add / remove / move;\nstanding vs task)
+S --> QS
+A --> QS
+E --> QS
+C --> QS
+
+CMD --> QS : reads ALL per-role queues\n(QUEUE pickup line per round)\nworks top-most TASK\n(standing = constraints)\nqueue_done / queue_fail
+
+C --> QS : arbitrates when\ncommander cannot\n(sends move/remove)
+ORD --> C : recent orders
+ARTS --> C : plans + directives to review
+
+PEERS --> LLM : streaming chat\n(reasoning visible in role logs)
+CMD --> LLM : streaming + native tools\n(old snapshots collapsed\nto world summary)
+
+CMD --> JSONL
+PEERS --> JSONL
+
+note bottom of ART
+  All files: atomic os.replace, epoch timestamped
+  staleness > 60s ignored by consumers (FR- fleet spec)
+end note
+@enduml

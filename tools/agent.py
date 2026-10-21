@@ -21,6 +21,7 @@ import socket
 import sys
 import time
 import urllib.request
+import urllib.error
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 from agent_tools import TOOLS, TOOL_NAMES  # noqa: E402
@@ -120,7 +121,7 @@ class LLM:
         return msg.get("content") or ""
 
     def chat_stream(self, messages, log_raw_fn=None, use_tools=True,
-                    max_tokens=2600):
+                    max_tokens=2600, thinking=True):
         """Consume the SSE stream; log deltas live; return (content, calls).
 
         log_raw_fn: verbatim delta sink (per-role logger for peers);
@@ -133,7 +134,7 @@ class LLM:
             "stream": True,
             "temperature": self.temperature,
             "max_tokens": max_tokens,
-            "chat_template_kwargs": {"enable_thinking": True},
+            "chat_template_kwargs": {"enable_thinking": thinking},
         }
         if use_tools:
             payload["tools"] = TOOLS
@@ -647,6 +648,8 @@ def main():
          "if losing, retreat fighters to guard the Mothership."},
     ]
     last_save_action = None
+    # dedupe memory: key -> tick of last identical order issue
+    last_order_tick = {}
 
     while rnd < a.max_rounds:
         rnd += 1
@@ -676,6 +679,7 @@ def main():
                 log("[round %d] MATCH RESET detected (tick %d -> %d); ids regenerated"
                     % (rnd, last_tick_seen, view["tick"]))
                 next_event_idx = 0          # fresh event stream
+                last_order_tick.clear()     # ids regenerated: drop dedupe keys
                 # the engine process may be NEW (game restart): binding was
                 # lost (boundPlayer=-1) — rebind or every order gets rejected
                 try:
@@ -725,19 +729,59 @@ def main():
             nagline = "\n".join(due) if due else ""
             peerline = merge_peer_artifacts()
             qblock = commander_queue(rnd)
+            # TRUNCATION POLICY: full snapshots only for the last 2 rounds;
+            # older rounds' snapshot sections collapse to the ~141-char
+            # world summary (the 41-message window otherwise carries
+            # ~3.7k tokens/round = ~150k tokens vs a 65k ctx = HTTP 400)
+            view_json = json.dumps(view)
+            summary_line = world_summary(view)
+            for i, m in enumerate(messages):
+                if m.get("role") == "user" and m["content"] and \
+                        isinstance(m["content"], str) and \
+                        "\nSnapshot:" in m["content"] and \
+                        i < len(messages) - 2:
+                    head, _, tail = m["content"].partition("\nSnapshot:")
+                    m["content"] = (head + "\n" + summary_line +
+                                    "\n(older snapshot elided)" +
+                                    tail.rpartition("\nCommand the fleet")[2]
+                                    if False else
+                                    head + "\n" + summary_line
+                                    + "\nCommand the fleet (1-6 parallel tool calls).")
             messages.append({
                 "role": "user",
                 "content": ("Events: " + json.dumps(fresh[:4]) + "\n"
                             + nagline + "\n"
                             + qblock +
                             peerline +
-                            "Snapshot:\n" + json.dumps(view) +
+                            "Snapshot:\n" + view_json +
                             "\nCommand the fleet (1-6 parallel tool calls).")})
 
             log("[round %d] reasoning+answer stream:" % rnd)
-            content, calls = llm.chat_stream(messages)
+            try:
+                content, calls = llm.chat_stream(messages)
+            except urllib.error.HTTPError as he:
+                if he.code == 400:
+                    # context overflow: llama.cpp rejects > ctx — drop the
+                    # oldest half of the conversation and retry this round
+                    log("[round %d] HTTP 400 (context full) — trimming history"
+                        % rnd)
+                    messages = messages[:1] + messages[-8:]
+                    content, calls = llm.chat_stream(messages)
+                else:
+                    raise
             messages = messages[-41:]
 
+            if not calls:
+                # thinking monologue burned the whole token budget before any
+                # tool call — retry THIS round with thinking off so the model
+                # emits commands directly (nudge alone just repeats the loop)
+                log("[round %d] no tool call after thought; retrying "
+                    "thinking-off" % rnd)
+                messages.append({"role": "user",
+                                 "content": "Stop planning. Emit the tool "
+                                 "calls now."})
+                content, calls = llm.chat_stream(messages, thinking=False,
+                                                 max_tokens=2000)
             if not calls:
                 log("[round %d] no tool call; nudging back to command" % rnd)
                 messages.append({"role": "assistant", "content": content or "..."})
@@ -747,7 +791,7 @@ def main():
                 continue
 
             executed_this_round = 0
-            MAX_CALLS_PER_ROUND = 6
+            MAX_CALLS_PER_ROUND = 16
             for call in calls:
                 if executed_this_round >= MAX_CALLS_PER_ROUND:
                     log("[round %d] further calls dropped (batch cap)"
@@ -764,7 +808,18 @@ def main():
                 args = guard_call(name, args, snap)
                 key = (name, tuple(sorted(args.get("ships", []) or [])) if name != "order_harvest" else (args.get("ships") or [None])[0],
                        args.get("target"), args.get("dockWith"),
-                       args.get("tech"), args.get("type"))
+                       args.get("tech"), args.get("type"),
+                       args.get("formation"), args.get("tactics"))
+                if key != (None, (), None, None, None, None, None, None) and \
+                        not fresh and \
+                        last_order_tick.get(key, -10**9) > \
+                        view.get("tick", 0) - 80:
+                    # identical order issued very recently with nothing
+                    # happening since: no double-queue (formation churn!)
+                    log("[round %d] duplicate order suppressed (%s)"
+                        % (rnd, name))
+                    break
+                last_order_tick[key] = view.get("tick", 0)
                 verb = TOOL_VERB.get(name)
                 if not fresh and verb and ships_already_executing(args, verb, snap):
                     # authoritative dedupe: the snapshot shows the requested
