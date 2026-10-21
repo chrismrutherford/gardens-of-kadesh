@@ -1,0 +1,92 @@
+[
+ {
+  "check": "kamikaze",
+  "resp": {
+   "id": 12,
+   "result": {
+    "queued": true,
+    "orderId": 12
+   }
+  }
+ },
+ {
+  "check": "parade",
+  "resp": {
+   "id": 13,
+   "result": {
+    "queued": true,
+    "orderId": 13
+   }
+  }
+ },
+ {
+  "check": "ru_transfer",
+  "resp": {
+   "id": 14,
+   "result": {
+    "queued": true,
+    "orderId": 14
+   }
+  }
+ },
+ {
+  "check": "ru_transfer_overspend",
+  "resp": {
+   "id": 15,
+   "error": {
+    "code": "E_UNAFFORDABLE",
+    "message": "order rejected"
+   }
+  }
+ },
+ {
+  "check": "alliance",
+  "resp": {
+   "id": 16,
+   "result": {
+    "queued": true,
+    "orderId": 16
+   }
+  }
+ },
+ {
+  "check": "alliance_self",
+  "resp": {
+   "id": 17,
+   "error": {
+    "code": "E_BAD_ID",
+    "message": "order rejected"
+   }
+  }
+ },
+ {
+  "check": "hyperspace",
+  "resp": {
+   "id": 18,
+   "result": {
+    "queued": true,
+    "orderId": 18
+   }
+  }
+ },
+ {
+  "check": "hyperspace_nocoord",
+  "resp": {
+   "id": 19,
+   "error": {
+    "code": "E_BAD_REQUEST",
+    "message": "order rejected"
+   }
+  }
+ },
+ {
+  "check": "build_badtype",
+  "resp": {
+   "id": 20,
+   "error": {
+    "code": "E_BAD_REQUEST",
+    "message": "order rejected"
+   }
+  }
+ }
+]

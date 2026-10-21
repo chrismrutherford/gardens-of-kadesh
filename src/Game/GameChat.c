@@ -746,6 +746,13 @@ void gcProcessGameChatPacket(struct ChatPacket *packet)
 ----------------------------------------------------------------------------*/
 void gcProcessGameTextMessage(char *message, udword col)
 {
+    // spectating/aiplay sessions can reach the chat funnels (e.g. clWrapSetAlliance)
+    // without the chat front-end initialized: no UI, no history — drop text
+    if (chatmutex == NULL)
+    {
+        return;
+    }
+
     gcLockGameChat();
 
     strcpy(threadtransfer[numnewchat].chatstring,message);

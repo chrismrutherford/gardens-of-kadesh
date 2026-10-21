@@ -76,22 +76,22 @@ validation parity (FR-009); new verbs end-to-end.
 
 ### C backend
 
-- [ ] T012 [P] [US2] `src/AIPlay/aiplay.h`: add verbs
+- [x] T012 [P] [US2] `src/AIPlay/aiplay.h`: add verbs
   kamikaze, parade, ru_transfer, alliance, hyperspace to aiplayVerb + names
-- [ ] T013 [P] [US2] `src/AIPlay/aiplay_orders.c`: verb table entries +
+- [x] T013 [P] [US2] `src/AIPlay/aiplay_orders.c`: verb table entries +
   parseOrder rules (kamikaze/parade take name onOff; ru_transfer params
   `to`,`amount`; alliance `player`,`onOff`; hyperspace target coord[3])
-- [ ] T014 [US2] `src/AIPlay/aiplay_engine.c` backendDispatchOrder cases:
+- [x] T014 [US2] `src/AIPlay/aiplay_engine.c` backendDispatchOrder cases:
   clWrapSetKamikaze(layer,select); clWrapSetMilitaryParade;
   clWrapRUTransfer(from=bound,to,amount,0) with RU precheck → E_UNAFFORDABLE,
   valid player → E_BAD_ID; clWrapSetAlliance(type,bound,player); 
   clWrapMpHyperspace(layer,select,from=lead pos,to) (depends T012,T013)
-- [ ] T015 [US2] Build engine (`meson compile -C build`) +
+- [x] T015 [US2] Build engine (`meson compile -C build`) +
   `src/AIPlay/tests` unit tests for new verb dispatch (stub backend); green
 
 ### Python sidecar
 
-- [ ] T016 [P] [US2] `tools/aiplay_mcp.py` via REGISTRY: expose
+- [x] T016 [P] [US2] `tools/aiplay_mcp.py` via REGISTRY: expose
   order_kamikaze, order_parade, order_ru_transfer, order_alliance,
   order_hyperspace with full JSON Schemas
 - [ ] T017 [US2] Submit-time validation (FR-009) in aiplay_protocol +
