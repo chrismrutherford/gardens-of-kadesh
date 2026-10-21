@@ -3909,6 +3909,23 @@ void univUnhideJustAboutEverything(void)
 ----------------------------------------------------------------------------*/
 void univDeleteDeadShip(Ship *ship, sdword deathBy)
 {
+    // AI play: attribute real deaths — the damage path already stores
+    // whoKilledMe/howDidIDie on the ship before it is wiped (UnivUpdate
+    // ApplyDamageToTarget fallthrough). Without this, every kill looked
+    // like an aux-0 eviction ghost.
+    switch (ship->howDidIDie)
+    {
+    case DEATH_Killed_By_Player:
+    case DEATH_Killed_By_Player_Explosion:
+    case DEATH_Killed_By_Kamikaze:
+    case DEATH_Killed_By_Dead_Player:
+        aiplayNotifyShipDestroyed(ship, ship->whoKilledMe);
+        break;
+    default:  // collision, retirement, salvage, scuttle, game-end: no killer
+        aiplayNotifyShipDestroyed(ship, -1);
+        break;
+    }
+
     Effect *effect;
     etgeffectstatic *explosion;
     etglod *etgLOD;

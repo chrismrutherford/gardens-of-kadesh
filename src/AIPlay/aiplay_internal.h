@@ -31,6 +31,7 @@ const aiplayEngineBackend *aiplayBackendGet(void);
 
 // diagnostics via backend sink (no engine symbols leak into the core)
 void aiplayTraceLog(const char *line);
+extern char aiplayBuildStamp[40];   // engine fills from __DATE__ __TIME__
 
 // snapshot writing (aiplay_snapshot.c): params subset of request
 void aiplaySnapshotWrite(aiplayJsonBuf *out, const struct aiplayJsonDoc *doc, int32_t params);

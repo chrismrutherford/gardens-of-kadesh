@@ -74,6 +74,13 @@ Launcher PIDs are saved to `/tmp/gok-{game,mcp,fleet}.pid`; kill with
   (`ps aux | grep tools/agent`) and kill the orphans first (multiple fleets
   must never coexist)
 
+## Logbook convention (gameplay tactics)
+
+Record every gameplay tactic/doctrine learned while commanding the match in
+the engineer-logbook as a NOTE tagged **`hw-play-book`** (same tag in title
+keywords). Retrieve with `list_notes tag=hw-play-book` or
+`search('hw-play-book')` — tactics persist across sessions this way.
+
 ## Test & build
 
 ```sh

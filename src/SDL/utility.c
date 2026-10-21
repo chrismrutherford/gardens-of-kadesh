@@ -3438,13 +3438,28 @@ void PrepareVersionStringStuff()
     Outputs     :
     Return      : pointer to newly allocated memory
 ----------------------------------------------------------------------------*/
+#define UTY_MAX_GROWTH_HEAPS   MGH_NumberGrowthHeaps
+typedef struct { void *base; sdword len; } utyGrowthHeapRecord;
+static utyGrowthHeapRecord utyGrowthHeapRecords[UTY_MAX_GROWTH_HEAPS];
+static sdword utyGrowthHeapCount = 0;
+static unsigned int utyMemoryHeapLen = 0;   // munmap needs the mapped length
+
 void *utyGrowthHeapAlloc(sdword size)
 {
     dbgAssertOrIgnore(size > 0);
 #ifdef _WIN32
     return((void *)VirtualAlloc(NULL, size, MEM_COMMIT, PAGE_READWRITE));
 #else
-    return mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    void *heap = mmap(0, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (heap != MAP_FAILED && utyGrowthHeapCount < UTY_MAX_GROWTH_HEAPS)
+    {
+        // remember the length: munmap needs it (a length of 0 fails EINVAL
+        // and tripped the shutdown assertion)
+        utyGrowthHeapRecords[utyGrowthHeapCount].base = heap;
+        utyGrowthHeapRecords[utyGrowthHeapCount].len  = size;
+        utyGrowthHeapCount++;
+    }
+    return heap;
 #endif
 }
 
@@ -3462,9 +3477,18 @@ void utyGrowthHeapFree(void *heap)
     result = VirtualFree(heap, 0, MEM_RELEASE);
     dbgAssertOrIgnore(result);
 #else
-    int result;
-    result = munmap(heap, 0);
-    dbgAssertOrIgnore(result != -1);
+    for (sdword i = 0; i < utyGrowthHeapCount; i++)
+    {
+        if (utyGrowthHeapRecords[i].base == heap)
+        {
+            int result = munmap(heap, utyGrowthHeapRecords[i].len);
+            dbgAssertOrIgnore(result != -1);
+            utyGrowthHeapRecords[i] = utyGrowthHeapRecords[utyGrowthHeapCount - 1];
+            utyGrowthHeapCount--;
+            return;
+        }
+    }
+    dbgMessagef("utyGrowthHeapFree: unknown heap %p not unmapped", heap);
 #endif
 }
 
@@ -3769,6 +3793,7 @@ char* utyGameSystemsPreInit(void)
 #else
     utyMemoryHeap = mmap(0, MemoryHeapSize + sizeof(memcookie) * 4,
         PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    utyMemoryHeapLen = MemoryHeapSize + sizeof(memcookie) * 4;
 #endif
 
     if (utyMemoryHeap == NULL)
@@ -4286,7 +4311,7 @@ char* utyGameSystemsPreShutdown(void)
         bool32 result = VirtualFree(utyMemoryHeap, 0, MEM_RELEASE);
         dbgAssertOrIgnore(result);
 #else
-        dbgAssertAlwaysDo(munmap(utyMemoryHeap, 0) != -1);
+        dbgAssertAlwaysDo(munmap(utyMemoryHeap, utyMemoryHeapLen) != -1);
 #endif
         utyClear(SSA_MemoryHeap);
     }
@@ -4638,7 +4663,7 @@ char *utyGameSystemsShutdown(void)
         dbgAssertOrIgnore(result);
 #else
         int result;
-        result = munmap(utyMemoryHeap, 0);
+        result = munmap(utyMemoryHeap, utyMemoryHeapLen);
         dbgAssertOrIgnore(result != -1);
 #endif
         utyClear(SSA_MemoryHeap);

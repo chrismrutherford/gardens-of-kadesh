@@ -67,8 +67,11 @@ void aiplayEngineAutoLoad(void)
         return;
     }
     aiplayAutoLoadDone = TRUE;
-    strcpy(aiplaySavePath, aiplayAutoSaveIsMP ? "SavedGames\\MultiPlayer\\"
-                                              : "SavedGames\\SinglePlayer\\");
+    // mirrors backendSaveGame(): "ai-" prefix + forward slashes (verified
+    // working: SavedGames/MultiPlayer/ai-<name> loads agent savegames).
+    // User-made saves are reachable by copying to ai-<name> (see launch shim).
+    strcpy(aiplaySavePath, aiplayAutoSaveIsMP ? "SavedGames/MultiPlayer/ai-"
+                                              : "SavedGames/SinglePlayer/ai-");
     strcat(aiplaySavePath, aiplayAutoSaveName);
     dbgMessagef("AI play: auto-loading %s savegame '%s'",
                 aiplayAutoSaveIsMP ? "multiplayer" : "singleplayer", aiplaySavePath);
@@ -215,6 +218,42 @@ void aiplayEngineSyncShips(void)
     {
         Ship *ship = (Ship *)listGetStructOfNode(node);
         aiplayIdTouch((void *)ship, (int)ship->playerowner->playerIndex);
+        // ships docked INSIDE are not in universe.ShipList (Dock.c only re-adds
+        // them on dockPutShipOutside) — without this walk they go unseen and
+        // are evicted as ghost shipDestroyed (aux 0) while alive, and become
+        // unorderable (E_BAD_ID) until they re-launch
+        if (ship->shipsInsideMe != NULL)
+        {
+            InsideShip *inside = (InsideShip *)ship->shipsInsideMe->insideList.head;
+            while (inside != NULL && inside->ship != NULL)
+            {
+                aiplayIdTouch((void *)inside->ship,
+                              (int)ship->playerowner->playerIndex);
+                inside = (InsideShip *)((Node *)inside->node.next);
+            }
+        }
+        node = node->next;
+    }
+    // hyperspacing ships are out of ShipList while their MP jump runs; their
+    // command todos still hold them — keep touching so evict-unseen doesn't
+    // ghost-destroy jumping ships (six fighters were reported destroyed this
+    // way while the user hyperspaced them)
+    node = universe.mainCommandLayer.todolist.head;
+    while (node != NULL)
+    {
+        CommandToDo *todo = (CommandToDo *)listGetStructOfNode(node);
+        if (todo->ordertype.order == COMMAND_MP_HYPERSPACING && todo->selection != NULL)
+        {
+            for (sdword i = 0; i < todo->selection->numShips; i++)
+            {
+                Ship *jumping = todo->selection->ShipPtr[i];
+                if (jumping != NULL)
+                {
+                    aiplayIdTouch((void *)jumping,
+                                  (int)jumping->playerowner->playerIndex);
+                }
+            }
+        }
         node = node->next;
     }
     node = universe.ResourceList.head;
@@ -563,10 +602,14 @@ static sdword resolveShips(const aiplayOrderRequest *o, Ship **ships, sdword max
     {
         void *  ship  = NULL;
         int32_t owner = -1;
-        if (!aiplayIdResolve(o->shipIds[i], &ship, &owner) ||
-            !backendObjectLive(ship) ||
-            owner != aiplayBoundPlayer())
+        bool    resolved = aiplayIdResolve(o->shipIds[i], &ship, &owner);
+        bool    live = resolved && backendObjectLive(ship);
+        if (!resolved || !live || owner != aiplayBoundPlayer())
         {
+            // TEMP-DEBUG (bug hunt: ship resolve failures on live ships)
+            dbgMessagef("AIPLAY-RESOLVE-FAIL id=%llu resolved=%d live=%d mapOwner=%d bound=%d",
+                        (unsigned long long)o->shipIds[i], resolved, live,
+                        resolved ? owner : -99, aiplayBoundPlayer());
             return -1;
         }
         ships[n++] = (Ship *)ship;
@@ -695,6 +738,12 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
             !backendObjectLive(target) ||
             !aiplayIdIsResource(o->targetId))
         {
+            // TEMP-DEBUG (bug hunt: harvest target failures)
+            dbgMessagef("AIPLAY-HARVEST-FAIL target=%llu kind=%d resolved=%d live=%d isRes=%d",
+                        (unsigned long long)o->targetId, o->targetKind,
+                        aiplayIdResolve(o->targetId, &target, NULL),
+                        aiplayIdResolve(o->targetId, &target, NULL) && backendObjectLive(target),
+                        aiplayIdIsResource(o->targetId));
             return aiplayError_badId;   // harvest targets must be resources
         }
         clWrapCollectResource(&universe.mainCommandLayer, select, (ResourcePtr)target);
@@ -1060,6 +1109,10 @@ static bool backendSaveGame(const char *name)
 
 void aiplayEngineInit(void)
 {
+    // stamp the build into the session status (debug: proves the running
+    // binary identity through aiSession.status / kadesh_game_status)
+    snprintf(aiplayBuildStamp, sizeof(aiplayBuildStamp), "%s %s",
+             __DATE__, __TIME__);
     aiplayInit(aiplayRequested != FALSE, NULL, aiplayEngineBackendGet());
     if (aiplayRequested)
     {

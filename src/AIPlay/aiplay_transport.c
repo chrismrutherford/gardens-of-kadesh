@@ -13,6 +13,7 @@
 
 #include <errno.h>
 #include <fcntl.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -39,6 +40,16 @@ static aiplayClient clients[AIPLAY_MAX_CLIENTS];
 static int          listenFd = -1;
 static char         socketPath[512];
 
+static void transportTrace(const char *fmt, ...)
+{   // pure-core-safe diagnostics (pure core has no dbgMessagef)
+    char buf[256];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(buf, sizeof(buf), fmt, args);
+    va_end(args);
+    aiplayTraceLog(buf);
+}
+
 void aiplayTransportReset(void)
 {
     memset(clients, 0, sizeof(clients));
@@ -54,6 +65,7 @@ bool aiplayTransportStart(const char *path)
     listenFd = socket(AF_UNIX, SOCK_STREAM, 0);
     if (listenFd < 0)
     {
+        transportTrace("AIPLAY-TRANSPORT-FAIL socket() error=%s", strerror(errno));
         return false;
     }
     struct sockaddr_un addr;
@@ -63,6 +75,8 @@ bool aiplayTransportStart(const char *path)
     unlink(socketPath);  // stale socket from a crashed run is not fatal
     if (bind(listenFd, (struct sockaddr *)&addr, sizeof(addr)) < 0)
     {
+        // TEMP-DEBUG (bug hunt: transport not coming up after savegame load)
+        transportTrace("AIPLAY-TRANSPORT-FAIL bind(%s) error=%s", socketPath, strerror(errno));
         close(listenFd);
         listenFd = -1;
         return false;
@@ -81,6 +95,7 @@ bool aiplayTransportStart(const char *path)
     {
         clients[i].fd = -1;
     }
+    transportTrace("AIPLAY-TRANSPORT-OK listening on %s", socketPath);
     return true;
 }
 

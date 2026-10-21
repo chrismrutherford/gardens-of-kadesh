@@ -16,6 +16,7 @@ bool32 aiplayCmdlineSaveMP(char *string);  // /aiPlayLoadMP <name> handler (COF_
 void aiplayEngineShutdown(void); // call inside utyGameSystemsShutdown
 void aiplayEngineRestart(void);  // call inside gameStart (universe rebuilds)
 void aiplayEngineSyncShips(void);// call at the end of univUpdate, before aiplayTickEnd
+void aiplayNotifyShipDestroyed(void *ship, int killerOwner);  // call at ship death (killer playerIndex, -1 if unattributed)
 
 // core hooks (see aiplay.h)
 void aiplayFramePoll(void);

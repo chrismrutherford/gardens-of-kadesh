@@ -244,6 +244,11 @@ void aiplayIdEvictUnseen(void)
         {
             if (!idMap[i].isResource)   // ship deaths are reported (FR-003)
             {
+                // TEMP-DEBUG (bug hunt: aux-0 ghost destructions — is this a
+                // real death (hook unwired) or a live docked/inside ship?)
+                // pure core: no dbgMessagef here — stderr, test suites ignore
+                fprintf(stderr, "AIPLAY-EVICT-SHIP id=%llu mapOwner=%d (no killer event)\n",
+                        (unsigned long long)idMap[i].id, idMap[i].owner);
                 aiplayEventPush(aiplayEvent_shipDestroyed, idMap[i].id, 0, idMap[i].owner);
             }
             idMap[i].used = false;
@@ -258,6 +263,10 @@ void aiplayNotifyShipDestroyed(void *shipOpaque, int killerOwner)
     if (e != NULL)
     {
         aiplayEventPush(aiplayEvent_shipDestroyed, e->id, (uint64_t)(killerOwner + 1), e->owner);
+        // consume the entry: the ship is gone from ShipList next tick, and the
+        // eviction path would otherwise push a DUPLICATE (aux 0) ghost event
+        e->used = false;
+        e->ship = NULL;
     }
 }
 
@@ -414,6 +423,7 @@ static aiplayError bindPlayer(int32_t playerIndex)
 
 // --------------------------------------------------------------- snapshots
 
+char aiplayBuildStamp[40] = "unknown";
 static void writeStatus(aiplayJsonBuf *out)
 {
     static const char *stateNames[] = {"disabled", "lobby", "playing", "matchOver"};
@@ -422,6 +432,9 @@ static void writeStatus(aiplayJsonBuf *out)
     aiplayJsonInt(out, "boundPlayerIndex", aiplay.boundPlayer);
     aiplayJsonInt(out, "sessionId", (int64_t)AIPLAY_PROTOCOL_VERSION);
     aiplayJsonString(out, "mapName", backend != NULL ? backend->mapName() : "");
+    // binary build identity (engine fills from __DATE__ __TIME__): proves a
+    // running instance was rebuilt when debugging engine changes
+    aiplayJsonString(out, "binaryBuild", aiplayBuildStamp);
     aiplayJsonBufAddStr(out, "\"matchStatus\":{");
     aiplayJsonBool(out, "running", backend != NULL && backend->gameRunning());
     aiplayJsonBool(out, "paused", backend != NULL && backend->isPaused());
