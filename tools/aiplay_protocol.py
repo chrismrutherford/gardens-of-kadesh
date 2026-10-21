@@ -628,8 +628,11 @@ def validate_snapshot(snap):
     for key, typ in (("tick", int), ("paused", bool), ("income", (int, float))):
         if key not in snap:
             add("missing %s" % key)
-        elif isinstance(snap[key], bool) != (typ is bool) and \
-                not isinstance(snap[key], typ):
+            continue
+        v = snap[key]
+        ok = isinstance(v, bool) if typ is bool else \
+            isinstance(v, typ) and not isinstance(v, bool)
+        if not ok:
             add("%s wrong type" % key)
     for arr in ("players", "ships", "resources", "buildQueue", "research"):
         if arr not in snap:

@@ -189,5 +189,153 @@ class TestParityFixtures(unittest.TestCase):
         self.assertEqual(bad, [], "raw pointer targetIds: %s" % bad)
 
 
+
+
+class TestValidatorBranches(unittest.TestCase):
+    """Branch completion for validate_snapshot/validate_events/_validate."""
+    SNAP = {
+        "tick": 1, "paused": False, "income": -1,
+        "players": [{"index": 0, "isAI": False, "resourceUnits": 1,
+                     "alive": True, "lost": False}],
+        "ships": [{"id": 1, "owner": 0, "type": "Interceptor", "pos": [0, 0, 0],
+                   "vel": [0, 0, 0], "health": 10, "healthMax": 10,
+                   "dps": 1.0, "guns": 1, "range": 1.0, "order": None}],
+        "resources": [{"id": 9, "value": 100, "pos": [0, 0, 0]}],
+        "buildQueue": [], "research": [],
+        "techTree": {"labs": 1, "canResearch": True, "locked": [],
+                     "researched": []},
+        "matchStatus": {"running": True, "boundPlayerIndex": 0,
+                        "winner": None, "perPlayer": []},
+    }
+
+    def test_valid_baseline(self):
+        self.assertEqual(P.validate_snapshot(self.SNAP), [])
+
+    def test_missing_sections(self):
+        bad = {k: v for k, v in self.SNAP.items() if k not in
+               ("players", "ships", "resources", "buildQueue", "research")}
+        errs = P.validate_snapshot(bad)
+        self.assertEqual(len(errs), 5)
+
+    def test_none_snapshot(self):
+        self.assertEqual(P.validate_snapshot(None),
+                         ["snapshot must be an object"])
+
+    def test_top_level_types(self):
+        bad = dict(self.SNAP, tick=None)
+        self.assertEqual(P.validate_snapshot(bad), ["tick wrong type"])
+
+    def test_player_and_ship_missing_fields(self):
+        bad = dict(self.SNAP, players=[{"index": 0}],
+                   ships=[{"id": 5}])
+        errs = P.validate_snapshot(bad)
+        self.assertEqual(len(errs), 14)
+
+    def test_unclamped_health(self):
+        ship = dict(self.SNAP["ships"][0], health=-5)
+        errs = P.validate_snapshot(dict(self.SNAP, ships=[ship]))
+        self.assertEqual(errs, ["ship 1 health unclamped"])
+
+    def test_bad_order_verbs(self):
+        ship = dict(self.SNAP["ships"][0], order={"verb": "warp"})
+        errs = P.validate_snapshot(dict(self.SNAP, ships=[ship]))
+        self.assertEqual(len(errs), 1)
+
+    def test_techtree_and_matchstatus_missing(self):
+        bad = dict(self.SNAP)
+        bad["techTree"] = {"labs": 1}
+        bad["matchStatus"] = {"running": True}
+        errs = P.validate_snapshot(bad)
+        self.assertEqual(len(errs), 6)
+
+    def test_events_missing_shape(self):
+        self.assertEqual(P.validate_events(None), ["events must be list"])
+        errs = P.validate_events({"events": [{"type": "orderRejected",
+                                              "tick": 1, "id": 1}]})
+        self.assertEqual(len(errs), 3)   # aux+owner missing + bad aux
+
+    def test_unknown_event_type(self):
+        errs = P.validate_events({"events": [{"type": "laserShow",
+                                              "tick": 1, "id": 0, "aux": 0,
+                                              "owner": 0}]})
+        self.assertEqual(errs, ["unknown event type 'laserShow'"])
+
+    def test_order_rejected_aux_codes(self):
+        for aux, code in P.ERROR_ENUM_TO_CODE.items():
+            if aux == 0:
+                continue
+            errs = P.validate_events({"events": [{"type": "orderRejected",
+                                                  "tick": 1, "id": 1,
+                                                  "aux": aux, "owner": 0}]})
+            self.assertEqual(errs, [], "aux %d -> %s" % (aux, code))
+
+
+class TestValidationBranches(unittest.TestCase):
+    def test_unknown_tool(self):
+        tool, err = P.decode_call(P.encode_call("order_warp", {}))
+        self.assertEqual(tool, "reject")
+
+    def test_nonobject_params(self):
+        self.assertIsNotNone(P._validate("order_halt", "nonsense"))
+
+    def test_ship_types(self):
+        self.assertIsNotNone(P._validate("order_halt", {"ships": ["a"]}))
+        self.assertIsNotNone(P._validate("order_halt", {"ships": "x"}))
+        self.assertIsNotNone(P._validate(
+            "order_halt", {"ships": list(range(1, 66))}))   # 65 > 64 cap
+
+    def test_coord_length(self):
+        self.assertIsNotNone(P._validate(
+            "order_move", {"ships": [1], "target": [1, 2]}))
+
+    def test_bool_string_coercions(self):
+        for v, want in (("on", "on"), ("0", "off"), (1, "on"), (True, "on")):
+            self.assertEqual(P.on_off(v), want)
+        self.assertEqual(P.on_off("bogus"), "bogus")
+
+    def test_state_tools_with_params(self):
+        wire = P.encode_call("observe", {"owner": 0})
+        self.assertEqual(wire["method"], "state.snapshot")
+        self.assertNotIn("id", wire.get("params", {}))
+
+    def test_encode_result(self):
+        self.assertEqual(P.encode_result({"x": 1}),
+                         {"id": 1, "result": {"x": 1}})
+
+
+
+class TestRemainingBranches(unittest.TestCase):
+    def test_integer_and_min_branches(self):
+        self.assertIn("code", P._validate("step", {"ticks": "ten"}) or {})
+        self.assertIn("code", P._validate("step", {"ticks": 0}) or {})
+        self.assertIn("code", P._validate("autolaunch", {"onOff": "maybe"}) or {})
+        self.assertIn("code", P._validate("order_build", {"type": ""}) or {})
+        self.assertIn("code", P._validate("order_build",
+                                          {"type": "X", "quantity": "many"})
+                      or {})
+        self.assertIn("code", P._validate("order_move",
+                                          {"ships": [1], "target": 5}) or {})
+
+    def test_ships_cap_line(self):
+        err = P._validate("order_halt", {"ships": list(range(1, 70))})
+        self.assertIn("code", err or {})
+
+    def test_unknown_verb_and_method(self):
+        self.assertEqual(P.decode_call({"id": 1, "method": "order.warp"}),
+                         ("reject", {"code": "E_BAD_REQUEST",
+                                     "message": "unknown method order.warp"}))
+        self.assertEqual(P.decode_call({"id": 1, "method": "universe.destroy"}),
+                         ("reject", {"code": "E_BAD_REQUEST",
+                                     "message": "unknown method universe.destroy"}))
+
+    def test_order_reject_via_decode(self):
+        tool, err = P.decode_call({"id": 1, "error":
+                                   {"code": "E_BAD_ID", "message": "x"}})
+        self.assertEqual(tool, "reject")
+        self.assertEqual(err["code"], "E_BAD_ID")
+
+    def test_dumps_helper(self):
+        self.assertEqual(P.dumps({"a": 1}), '{"a": 1}')
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
