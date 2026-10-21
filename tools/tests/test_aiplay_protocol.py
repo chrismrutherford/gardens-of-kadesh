@@ -149,8 +149,6 @@ class TestSchemaConformanceSC003(unittest.TestCase):
                          {v: k for k, v in want.items()})
 
 
-if __name__ == "__main__":
-    unittest.main(verbosity=2)
 
 class TestParityFixtures(unittest.TestCase):
     """US1 T011/T009: fixtures from a live 500+ object tick validate against
