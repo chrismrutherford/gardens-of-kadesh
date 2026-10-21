@@ -200,16 +200,20 @@ void aiplaySnapshotWrite(aiplayJsonBuf *out, const aiplayJsonDoc *doc, int32_t p
     aiplayJsonBufAdd(out, "],", 2);
 
     snapshotCtx ctx = {.out = out, .wroteAny = false};
+    // honor the parsed sections selection (FR-003): both keys stay present
+    // for schema stability, but only selected sections are populated
+    const bool wantShips     = filter.wantShips;
+    const bool wantResources = filter.wantResources;
     aiplayJsonBufAddStr(out, "\"ships\":[");
-    filter.wantShips     = true;
-    filter.wantResources = false;
+    filter.wantShips     = wantShips;             // caller's selection
+    filter.wantResources = false;                 // ships key: only ships
     aiplayIdEach(writeObjectEntry, &ctx);
     aiplayJsonBufAdd(out, "],", 2);
 
     ctx.wroteAny = false;
-    filter.wantShips = false;    // ships must not leak into the resources array
     aiplayJsonBufAddStr(out, "\"resources\":[");
-    filter.wantResources = true;
+    filter.wantShips     = false;                 // ships must not leak in
+    filter.wantResources = wantResources;         // caller's selection
     aiplayIdEach(writeObjectEntry, &ctx);
     aiplayJsonBufAdd(out, "],", 2);
 

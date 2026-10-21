@@ -52,7 +52,7 @@ snapshot/event schemas with no caps or hand filters on the layer side.
 **Independent test**: raw UDS vs MCP observe field-parity on a live match
 (quickstart §2); determinism check paused (quickstart §4).
 
-- [ ] T008 [US1] Add fixtures: capture live state.snapshot/state.events
+- [x] T008 [US1] Add fixtures: capture live state.snapshot/state.events
   responses into `tools/tests/fixtures/aiplay/*.json` (5+ samples incl. mid-battle)
 - [ ] T009 [P] [US1] In `tools/aiplay_protocol.py` add snapshot schema
   validator (validate_snapshot/validate_events per data-model.md field tables,
@@ -98,7 +98,7 @@ validation parity (FR-009); new verbs end-to-end.
   sidecar: required params per verb table; unknown/invalid ship type names
   rejected synchronously vs ship-type registry; fleet-wide exemptions
   (research/select/autolaunch/ru_transfer/alliance); ships≤64 — test cases added
-- [ ] T018 [US2] Live verification per quickstart §3 (each new verb exercised;
+- [x] T018 [US2] Live verification per quickstart §3 (each new verb exercised;
   sync rejection vs async orderRejected audited — SC-004)
 
 **Checkpoint**: US2 complete — nothing a human can do that the AI cannot.

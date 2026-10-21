@@ -226,9 +226,13 @@ void aiplayEngineSyncShips(void)
 }
 
 // per-ship current order from the command layer's CommandToDo list (T020)
+// (declared below; ships' order targets resolve through the id map)
+static bool backendObjectLive(void *opaque);
+
 static void fillShipOrder(Ship *ship, aiplayShipInfo *out)
 {
     out->orderVerb = NULL;
+
     Node *node = universe.mainCommandLayer.todolist.head;
     while (node != NULL)
     {
@@ -263,14 +267,25 @@ static void fillShipOrder(Ship *ship, aiplayShipInfo *out)
             out->orderVerb = "attack";
             if (todo->attack->numTargets > 0)
             {
-                out->orderTargetId = (uint64_t)(uintptr_t)todo->attack->TargetPtr[0];
+                // FR-013a/FR-014: serialize the MAPPED id, never a raw
+                // engine pointer; the snapshot consumers diff these ids
+                void *target = todo->attack->TargetPtr[0];
+                if (target != NULL && backendObjectLive(target))
+                {
+                    out->orderTargetId = aiplayIdTouch(target, 0);
+                }
             }
             break;
         case COMMAND_COLLECT_RESOURCES:
             out->orderVerb = "harvest";
             if (todo->collect.resource != NULL)
-            {   // CollectResourceCommand is a VALUE member carrying one ResourcePtr
-                out->orderTargetId = (uint64_t)(uintptr_t)todo->collect.resource;
+            {   // CollectResourceCommand is a VALUE member carrying one ResourcePtr;
+                // mapped id (FR-013a), not the raw ResourcePtr
+                if (backendObjectLive((void *)todo->collect.resource))
+                {
+                    out->orderTargetId =
+                        aiplayIdTouch((void *)todo->collect.resource, 0);
+                }
             }
             break;
         case COMMAND_DOCK:

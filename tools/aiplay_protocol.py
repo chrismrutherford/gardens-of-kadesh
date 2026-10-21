@@ -294,6 +294,90 @@ def dumps(wire):
     return json.dumps(wire)
 
 
+# ------------------------------------------------- snapshot/event schema
+# (data-model.md: authoritative field tables; FR-004/FR-006)
+
+ORDER_STATE_VERBS = {"move", "attack", "guard", "dock", "harvest", "launch",
+                     "special", "halt", "parade", "passive-attack", "moving",
+                     "order?"}
+
+EVENT_TYPES = {"matchStarted", "matchOver", "orderApplied", "orderRejected",
+               "shipDestroyed", "bindChanged", "matchContinued"}
+
+
+def validate_snapshot(snap):
+    """Validate engine snapshot against the authoritative schema; return a
+    list of drift errors (empty = faithful). Used by the sidecar to fail
+    loud on schema drift (US1 T010)."""
+    errs = []
+    add = errs.append
+    if not isinstance(snap, dict):
+        return ["snapshot must be an object"]
+    for key, typ in (("tick", int), ("paused", bool), ("income", (int, float))):
+        if key not in snap:
+            add("missing %s" % key)
+        elif isinstance(snap[key], bool) != (typ is bool) and \
+                not isinstance(snap[key], typ):
+            add("%s wrong type" % key)
+    for arr in ("players", "ships", "resources", "buildQueue", "research"):
+        if arr not in snap:
+            add("missing %s" % arr)
+        elif not isinstance(snap[arr], list):
+            add("%s must be list" % arr)
+    for p in snap.get("players", []):
+        for f in ("index", "isAI", "resourceUnits", "alive", "lost"):
+            if f not in p:
+                add("player missing %s" % f)
+    for s in snap.get("ships", []):
+        for f in ("id", "owner", "type", "pos", "vel", "health", "healthMax",
+                  "dps", "guns", "range", "order"):
+            if f not in s:
+                add("ship %s missing %s" % (s.get("id"), f))
+        if isinstance(s.get("health"), (int, float)) and \
+                isinstance(s.get("healthMax"), (int, float)) and \
+                s["healthMax"] > 0 and \
+                (s["health"] < 0 or s["health"] > s["healthMax"] * 2):
+            add("ship %s health unclamped" % s.get("id"))
+        o = s.get("order")
+        if o is not None:
+            if not isinstance(o, dict) or o.get("verb") not in ORDER_STATE_VERBS:
+                add("ship %s bad order verb %r" % (s.get("id"), o))
+    for r in snap.get("resources", []):
+        for f in ("id", "value", "pos"):
+            if f not in r:
+                add("resource missing %s" % f)
+    tt = snap.get("techTree")
+    if tt is not None:
+        for f in ("labs", "canResearch", "locked", "researched"):
+            if f not in tt:
+                add("techTree missing %s" % f)
+    ms = snap.get("matchStatus")
+    if ms is not None:
+        for f in ("running", "boundPlayerIndex", "winner", "perPlayer"):
+            if f not in ms:
+                add("matchStatus missing %s" % f)
+    return errs
+
+
+def validate_events(res):
+    """state.events payload -> drift errors (empty = faithful)."""
+    errs = []
+    events = (res or {}).get("events")
+    if not isinstance(events, list):
+        return ["events must be list"]
+    for e in events:
+        for f in ("type", "tick", "id", "aux", "owner"):
+            if f not in e:
+                errs.append("event missing %s" % f)
+        if e.get("type") not in EVENT_TYPES:
+            errs.append("unknown event type %r" % e.get("type"))
+        if isinstance(e.get("type"), str) and \
+                e["type"] == "orderRejected" and \
+                e.get("aux") not in ERROR_ENUM_TO_CODE:
+            errs.append("orderRejected aux %r not an aiplayError" % e.get("aux"))
+    return errs
+
+
 if __name__ == "__main__":
     import sys
     name, *rest = sys.argv[1:]

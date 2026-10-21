@@ -151,3 +151,45 @@ class TestSchemaConformanceSC003(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+class TestParityFixtures(unittest.TestCase):
+    """US1 T011/T009: fixtures from a live 500+ object tick validate against
+    the authoritative schema; raw UDS == MCP observe passthrough."""
+    FDIR = os.path.join(os.path.dirname(__file__), "fixtures", "aiplay")
+
+    def _load(self, name):
+        with open(os.path.join(self.FDIR, name)) as f:
+            return json.load(f)
+
+    def _snap(self, name):
+        d = self._load(name)
+        return d["result"] if "result" in d else d
+
+    def test_snapshots_validate(self):
+        for name in ("snapshot_live1.json", "snapshot_owner0.json",
+                     "snapshot_ships_only.json"):
+            errs = P.validate_snapshot(self._snap(name))
+            self.assertEqual(errs, [], "%s drift: %s" % (name, errs[:4]))
+
+    def test_events_validate(self):
+        errs = P.validate_events(self._snap("events_live.json"))
+        self.assertEqual(errs, [], "event drift: %s" % errs[:4])
+
+    def test_filter_semantics(self):
+        snap = self._snap("snapshot_owner0.json")
+        self.assertTrue(all(s["owner"] == 0 for s in snap["ships"]))
+        only = self._snap("snapshot_ships_only.json")
+        self.assertEqual(only["resources"], [])
+        full = self._snap("snapshot_live1.json")
+        self.assertGreater(len(full["ships"]), 40)      # 62 owned + enemies
+
+    def test_no_raw_pointer_targetIds(self):
+        # FR-013a regression guard: harvest targets are mappable ids
+        snap = self._snap("snapshot_live1.json")
+        bad = [s["id"] for s in snap["ships"]
+               if s.get("order") and s["order"].get("targetId", 0) > 2**48]
+        self.assertEqual(bad, [], "raw pointer targetIds: %s" % bad)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

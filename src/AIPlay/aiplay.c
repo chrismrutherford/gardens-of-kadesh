@@ -161,7 +161,9 @@ uint64_t aiplayIdTouchEx(void *ship, int owner, bool isResource)
     }
     e->seen       = true;
     e->owner      = owner;
-    e->isResource = isResource;
+    // isResource is create-only: order paths re-touch targets (attack/harvest)
+    // and must not flip an existing resource flag to ship (FR-013a)
+    e->isResource = e->isResource || isResource;
     return e->id;
 }
 
