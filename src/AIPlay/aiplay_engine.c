@@ -559,7 +559,8 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
 {
     // verbs that take no ship selection (contract: order.research takes only
     // "tech", order.autolaunch only "onOff")
-    bool shipless = (o->verb == aiplayVerb_research || o->verb == aiplayVerb_autolaunch) ||
+    bool shipless = (o->verb == aiplayVerb_research || o->verb == aiplayVerb_autolaunch ||
+                     o->verb == aiplayVerb_ruTransfer || o->verb == aiplayVerb_alliance) ||
                     (o->verb == aiplayVerb_build && o->numShips == 0);
 
     aiplaySelectAny sel;
@@ -819,6 +820,55 @@ static aiplayError backendDispatchOrder(const aiplayOrderRequest *o)
             return aiplayError_badRequest;
         }
         clWrapFormation(&universe.mainCommandLayer, select, f);
+        return aiplayError_none;
+    }
+    case aiplayVerb_kamikaze:
+    {
+        clWrapSetKamikaze(&universe.mainCommandLayer, select);
+        return aiplayError_none;
+    }
+    case aiplayVerb_parade:
+    {
+        clWrapSetMilitaryParade(&universe.mainCommandLayer, select);
+        return aiplayError_none;
+    }
+    case aiplayVerb_ruTransfer:
+    {
+        // same funnel the human RU-transfer screen uses (player-index only)
+        if (o->playerIndex < 0 ||
+            o->playerIndex >= backendNumPlayers())
+        {
+            return aiplayError_badId;
+        }
+        if (universe.players[aiplay.boundPlayer].resourceUnits < o->amount)
+        {
+            return aiplayError_unaffordable;   // FR-009 precheck
+        }
+        clWrapRUTransfer(&universe.mainCommandLayer, (sdword)aiplay.boundPlayer,
+                         o->playerIndex, (sdword)o->amount, 0);
+        return aiplayError_none;
+    }
+    case aiplayVerb_alliance:
+    {
+        if (o->playerIndex < 0 ||
+            o->playerIndex >= backendNumPlayers() ||
+            o->playerIndex == aiplay.boundPlayer)
+        {
+            return aiplayError_badId;
+        }
+        udword want = strcasecmp(o->name, "off") == 0 ? 0 : 1;
+        clWrapSetAlliance(want, (uword)aiplay.boundPlayer,
+                          (uword)o->playerIndex);
+        return aiplayError_none;
+    }
+    case aiplayVerb_hyperspace:
+    {
+        vector from = select->ShipPtr[0]->obj.posinfo.position;
+        vector to;
+        to.x = o->coord[0];
+        to.y = o->coord[1];
+        to.z = o->coord[2];
+        clWrapMpHyperspace(&universe.mainCommandLayer, select, from, to);
         return aiplayError_none;
     }
     }

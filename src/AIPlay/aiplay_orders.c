@@ -34,6 +34,11 @@ static aiplayVerb verbFromString(const char *s)
         {"launch",     aiplayVerb_launch},
         {"autolaunch", aiplayVerb_autolaunch},
         {"scuttle",    aiplayVerb_scuttle},
+        {"kamikaze",   aiplayVerb_kamikaze},
+        {"parade",     aiplayVerb_parade},
+        {"ru_transfer", aiplayVerb_ruTransfer},
+        {"alliance",   aiplayVerb_alliance},
+        {"hyperspace", aiplayVerb_hyperspace},
     };
     for (size_t i = 0; i < sizeof(table) / sizeof(table[0]); i++)
     {
@@ -132,6 +137,24 @@ static aiplayError parseOrder(
             out->quantity = q;
         }
     }
+
+    // player-index numeric params (ruTransfer "to"/"amount", alliance "player")
+    if (aiplayJsonGet(doc, params, "to") >= 0)
+    {
+        out->playerIndex = aiplayJsonGetInt(doc, params, "to");
+    }
+    if (aiplayJsonGet(doc, params, "amount") >= 0)
+    {
+        int64_t a = aiplayJsonGetInt64(doc, params, "amount");
+        if (a >= 0)
+        {
+            out->amount = (int64_t)a;
+        }
+    }
+    if (aiplayJsonGet(doc, params, "player") >= 0)
+    {
+        out->playerIndex = aiplayJsonGetInt(doc, params, "player");
+    }
     return aiplayError_none;
 }
 
@@ -156,6 +179,8 @@ static aiplayError validateOrder(const aiplayOrderRequest *o)
     case aiplayVerb_research:
     case aiplayVerb_select:
     case aiplayVerb_autolaunch:
+    case aiplayVerb_ruTransfer:
+    case aiplayVerb_alliance:
         break;  // fleet-wide commands do not need ship ids
     default:
         if (o->numShips == 0)
@@ -176,6 +201,24 @@ static aiplayError validateOrder(const aiplayOrderRequest *o)
     {
     case aiplayVerb_move:
         if (o->targetKind != aiplayTarget_coord)
+        {
+            return aiplayError_badRequest;
+        }
+        break;
+    case aiplayVerb_hyperspace:
+        if (o->targetKind != aiplayTarget_coord)
+        {
+            return aiplayError_badRequest;
+        }
+        break;
+    case aiplayVerb_ruTransfer:
+        if (o->playerIndex < 0 || o->amount <= 0)
+        {
+            return aiplayError_badRequest;
+        }
+        break;
+    case aiplayVerb_alliance:
+        if (o->playerIndex < 0)
         {
             return aiplayError_badRequest;
         }

@@ -72,6 +72,11 @@ typedef enum aiplayVerb
     aiplayVerb_launch,
     aiplayVerb_autolaunch,
     aiplayVerb_scuttle,
+    aiplayVerb_kamikaze,
+    aiplayVerb_parade,
+    aiplayVerb_ruTransfer,
+    aiplayVerb_alliance,
+    aiplayVerb_hyperspace,
 } aiplayVerb;
 
 typedef enum aiplayTargetKind
@@ -94,6 +99,8 @@ typedef struct aiplayOrderRequest
     uint64_t    targetId;
     char        name[AIPLAY_MAX_NAME];  // build type / research tech / formation
     int32_t     quantity;               // build quantity
+    int32_t     playerIndex;            // ruTransfer: "to"; alliance: "player"
+    int64_t     amount;                 // ruTransfer: "amount"
     aiplayError validation;             // filled by the validator when rejected
 } aiplayOrderRequest;
 
