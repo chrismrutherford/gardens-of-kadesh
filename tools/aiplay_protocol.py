@@ -231,6 +231,8 @@ ORDER_VERBS = {
         "params": {
             "ships": _ships(desc="strike craft ids to launch the "
                                  "kamikaze run"),
+            "onOff": _b(required=False,
+                        desc="true=kamikaze mode on (default on)"),
             "id": _i(desc=ID_D, required=False)}},
     "order_parade": {
         "funnel": "clWrapSetMilitaryParade", "desc":
@@ -239,6 +241,9 @@ ORDER_VERBS = {
         "tactics; ResourceCollectors in parade harvest NOTHING.",
         "params": {
             "ships": _ships(desc=SHIPS_D),
+            "onOff": _b(required=False,
+                        desc="true=set parade on, false=release from "
+                             "parade (default on)"),
             "id": _i(desc=ID_D, required=False)}},
     "order_ru_transfer": {
         "funnel": "clWrapRUTransfer", "desc":
@@ -366,6 +371,49 @@ REGISTRY = {
                                          "chars")},
         "game_status": {}, "get_events": {}, "pause": {}, "resume": {},
         "guide": {},
+    },
+    "returns": {
+        "state_tools": {
+            "bind_session":
+                "{playerIndex, sessionId, mapName} — or error: E_MATCH_OVER "
+                "(match over), E_BAD_REQUEST (out-of-range/second binding). "
+                "Emits bindChanged (first bind) or matchContinued (no-op "
+                "rebind) events.",
+            "game_status":
+                "{state, boundPlayerIndex, sessionId, mapName, matchStatus:"
+                "{running, paused, tick}} — boundPlayerIndex −1 means the "
+                "engine restarted: rebind.",
+            "observe":
+                "Snapshot object: {tick, timeElapsed, paused, income "
+                "(RU/min, −1 unknown/paused), players[], ships[], "
+                "resources[], buildQueue[], research[], techTree{}, "
+                "matchStatus{running, boundPlayerIndex, winner|null, "
+                "perPlayer[]}}. `sections` narrows ships/resources; both "
+                "keys always present.",
+            "get_events":
+                "{events: [{type, tick, id, aux, owner}, ...]} newest "
+                "first, ≤256 (ring). audit orderApplied/orderRejected "
+                "against your order ids.",
+            "pause": "{paused: true}.",
+            "resume": "{paused: false}.",
+            "step":
+                "{stepped: N, tick: <new tick>} — or E_BAD_REQUEST when "
+                "not paused. Snapshots during pause are byte-identical.",
+            "save_game":
+                "{saved: finalName} — or E_INTERNAL. Name reflects "
+                "sanitation (safe chars only).",
+        },
+        "local_tools": {
+            "guide": "Markdown text: playbook + strategy digest + snapshot "
+                     "dictionary concatenated.",
+        },
+        "orders":
+            "{queued: true, orderId: <your id>} for accepted orders — "
+            "then orderApplied (or orderRejected aux=<error enum>) appears "
+            "in the next events poll; rejection at submit returns "
+            "{error: {code, message}} synchronously (E_BAD_ID stale id, "
+            "E_UNAFFORDABLE, E_NO_BUILDER, E_NO_LABS, E_MATCH_OVER, "
+            "E_QUEUE_FULL, E_BAD_REQUEST).",
     },
     "order_tools": ORDER_VERBS,
     "funnel_overrides": FUNNEL_OVERRIDES,

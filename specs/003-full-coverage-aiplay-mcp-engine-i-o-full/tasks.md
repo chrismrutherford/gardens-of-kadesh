@@ -94,7 +94,7 @@ validation parity (FR-009); new verbs end-to-end.
 - [x] T016 [P] [US2] `tools/aiplay_mcp.py` via REGISTRY: expose
   order_kamikaze, order_parade, order_ru_transfer, order_alliance,
   order_hyperspace with full JSON Schemas
-- [ ] T017 [US2] Submit-time validation (FR-009) in aiplay_protocol +
+- [x] T017 [US2] Submit-time validation (FR-009) in aiplay_protocol +
   sidecar: required params per verb table; unknown/invalid ship type names
   rejected synchronously vs ship-type registry; fleet-wide exemptions
   (research/select/autolaunch/ru_transfer/alliance); ships≤64 — test cases added
@@ -110,14 +110,14 @@ validation parity (FR-009); new verbs end-to-end.
 **Goal**: all 7 event types correctly surfaced; per-ship damage/under-attack
 signal (FR-014).
 
-- [ ] T019 [P] [US3] `src/AIPlay/aiplay_engine.c`: expose per-ship attacker
+- [x] T019 [P] [US3] `src/AIPlay/aiplay_engine.c`: expose per-ship attacker
   signal in shipInfo — set orderTargetId/target on the ship's current
   damage source where the engine tracks it (passive-attack path) so analyst
   peers see "being attacked by id X" (FR-014)
-- [ ] T020 [US3] `tools/aiplay_protocol.py`: event schema per data-model
+- [x] T020 [US3] `tools/aiplay_protocol.py`: event schema per data-model
   (aux semantics table); validator reused in get_events path; tests: fixture
   events decode and validate (depends T019)
-- [ ] T021 [US3] Fix known quirks (FR-013): (a) harvest targetId raw-pointer
+- [x] T021 [US3] Fix known quirks (FR-013): (a) harvest targetId raw-pointer
   serialization → mapped resource id (engine writer must id-resolve before
   emit); (b) research field overlap documented + consumers updated; live
   check: collector harvest shows sane resource ids (depends T019)
@@ -132,10 +132,10 @@ signal (FR-014).
 
 **Independent test**: quickstart §4 cycle on live match.
 
-- [ ] T022 [US4] Contract tests: bind default 0, double-bind rejection,
+- [x] T022 [US4] Contract tests: bind default 0, double-bind rejection,
   matchOver gating, step-while-running rejection, save-name sanitation
   (extends test_aiplay_protocol.py)
-- [ ] T023 [US4] Live binding/time-control cycle per quickstart §4; confirm
+- [x] T023 [US4] Live binding/time-control cycle per quickstart §4; confirm
   byte-identical paused snapshots (determinism, SC-002)
 
 **Checkpoint**: US4 complete.
@@ -144,12 +144,12 @@ signal (FR-014).
 
 ## Phase 7: Polish & cross-cutting
 
-- [ ] T024 [P] Update `OPERATING.md` + `documentation/community/ai-snapshot-dictionary.md`
+- [x] T024 [P] Update `OPERATING.md` + `documentation/community/ai-snapshot-dictionary.md`
   pointers to the new registry/spec
-- [ ] T025 [US-final] Convergence: verification report against every spec
+- [x] T025 [US-final] Convergence: verification report against every spec
   criterion SC-001..SC-006 with evidence (test outputs, fixture diffs,
   timings for SC-006 on a 500+ object tick)
-- [ ] T026 Full suite green: `tools/tests/test_agent_multi.py` +
+- [x] T026 Full suite green: `tools/tests/test_agent_multi.py` +
   `tools/tests/test_aiplay_protocol.py` + C unit tests; launch-multi smoke
 
 ## Dependencies & Execution Order

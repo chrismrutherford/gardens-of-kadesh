@@ -79,6 +79,7 @@ def _tools_from_registry():
                                 "additionalProperties": True}}
 
     tools = []
+    returns = P.REGISTRY["returns"]
     for name in list(P.REGISTRY["state_tools"]) + \
             list(P.REGISTRY["local_tools"]) + list(P.REGISTRY["order_tools"]):
         for src, key in ((P.REGISTRY["descriptions"]["state_tools"],
@@ -89,7 +90,13 @@ def _tools_from_registry():
             if name in src:
                 desc = src[name] if key != "order_tools" else \
                     src[name]["desc"]
+                ret = returns["orders"] if key == "order_tools" else \
+                    returns[key].get(name)
                 break
+        else:
+            continue
+        if ret:
+            desc = "%s\n\nReturns: %s" % (desc, ret)
         mp = P.REGISTRY["order_tools"].get(name, {}).get("mp_only")
         if mp:
             desc += " [multiplayer]"
