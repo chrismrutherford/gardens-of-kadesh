@@ -138,6 +138,107 @@ static void testOrderSubmitViaJson(void)
     aiplayShutdown();
 }
 
+static void testNewOrderVerbs(void)
+{
+    char    out[1024];
+    aiplayJsonBuf resp;
+    aiplayJsonBufInit(&resp, out, sizeof(out));
+    char    line[320];
+
+    stubBackendReset();
+    stubSetRunning(true);
+    stubSetRUs(0, 5000); stubSetRUs(1, 5000);   // RU-transfer prechecks
+    aiplayInit(true, NULL, stubBackendGet());
+    aiplayHandleLine("{\"id\":1,\"method\":\"aiSession.bind\",\"params\":{\"playerIndex\":0}}", &resp);
+
+    // two owned ships for the selection-based verbs
+    int shipA = 0x21, shipB = 0x22;
+    uint64_t idA = aiplayIdTouch(&shipA, 0);
+    uint64_t idB = aiplayIdTouch(&shipB, 0);
+    unsigned baseDispatch = (unsigned)stubDispatchCount;
+    resp.len = 0;
+
+    // kamikaze: selection verb, dispatches to the funnel
+    snprintf(line, sizeof(line),
+             "{\"id\":2,\"method\":\"order.kamikaze\",\"params\":{\"id\":2,"
+             "\"ships\":[%llu]}}", (unsigned long long)idA);
+    aiplayHandleLine(line, &resp);
+    CHECK(bufContains(&resp, "\"queued\":true"));
+    (void)stubAdvanceTick();
+    aiplayTickBegin();
+    CHECK(stubDispatchCount == baseDispatch + 1);
+    CHECK(stubLastDispatch()->verb == aiplayVerb_kamikaze);
+    resp.len = 0;
+
+    // parade: selection verb
+    snprintf(line, sizeof(line),
+             "{\"id\":3,\"method\":\"order.parade\",\"params\":{\"id\":3,"
+             "\"ships\":[%llu]}}", (unsigned long long)idB);
+    aiplayHandleLine(line, &resp);
+    CHECK(bufContains(&resp, "\"queued\":true"));
+    resp.len = 0;
+
+    // ru_transfer: fleet-wide, valid player + amount
+    aiplayHandleLine("{\"id\":4,\"method\":\"order.ru_transfer\",\"params\":"
+                     "{\"id\":4,\"to\":1,\"amount\":500}}", &resp);
+    CHECK(bufContains(&resp, "\"queued\":true"));
+    resp.len = 0;
+
+    // ru_transfer: overspending -> submit-time E_UNAFFORDABLE (FR-009)
+    aiplayHandleLine("{\"id\":5,\"method\":\"order.ru_transfer\",\"params\":"
+                     "{\"id\":5,\"to\":1,\"amount\":99999}}", &resp);
+    CHECK(bufContains(&resp, "E_UNAFFORDABLE"));
+    resp.len = 0;
+
+    // ru_transfer: bad player -> validation error
+    aiplayHandleLine("{\"id\":6,\"method\":\"order.ru_transfer\",\"params\":"
+                     "{\"id\":6,\"to\":9,\"amount\":10}}", &resp);
+    CHECK(bufContains(&resp, "error"));
+    resp.len = 0;
+
+    // alliance: fleet-wide, on
+    aiplayHandleLine("{\"id\":7,\"method\":\"order.alliance\",\"params\":"
+                     "{\"id\":7,\"player\":1,\"onOff\":true}}", &resp);
+    CHECK(bufContains(&resp, "\"queued\":true"));
+    resp.len = 0;
+
+    // alliance: self -> rejected
+    aiplayHandleLine("{\"id\":8,\"method\":\"order.alliance\",\"params\":"
+                     "{\"id\":8,\"player\":0,\"onOff\":true}}", &resp);
+    CHECK(bufContains(&resp, "error"));
+    resp.len = 0;
+
+    // hyperspace: ships + coord target
+    snprintf(line, sizeof(line),
+             "{\"id\":9,\"method\":\"order.hyperspace\",\"params\":{\"id\":9,"
+             "\"ships\":[%llu],\"target\":[100,200,300]}}",
+             (unsigned long long)idA);
+    aiplayHandleLine(line, &resp);
+    CHECK(bufContains(&resp, "\"queued\":true"));
+    resp.len = 0;
+
+    // hyperspace without coord -> reject at validation
+    snprintf(line, sizeof(line),
+             "{\"id\":10,\"method\":\"order.hyperspace\",\"params\":{\"id\":10,"
+             "\"ships\":[%llu]}}", (unsigned long long)idA);
+    aiplayHandleLine(line, &resp);
+    CHECK(bufContains(&resp, "error"));
+    resp.len = 0;
+
+    // drain: all queued valid orders dispatch in submission order
+    (void)stubAdvanceTick();
+    aiplayTickBegin();
+    CHECK(stubDispatchCount == baseDispatch + 5);   // 5 valid verbs apply
+    CHECK(stubLastDispatch()->verb == aiplayVerb_hyperspace);
+    CHECK(stubLastDispatch()->coord[2] == 300.0f);
+
+    // applied events for all of them
+    aiplayHandleLine("{\"id\":11,\"method\":\"state.events\"}", &resp);
+    CHECK(bufContains(&resp, "orderApplied"));
+
+    aiplayShutdown();
+}
+
 static void testDeterministicWriter(void)
 {
     char    staticA[256], staticB[256];
@@ -160,5 +261,6 @@ void testJsonAll(void)
     testJsonUint64Ids();
     testBindAndSnapshot();
     testOrderSubmitViaJson();
+    testNewOrderVerbs();
     testDeterministicWriter();
 }

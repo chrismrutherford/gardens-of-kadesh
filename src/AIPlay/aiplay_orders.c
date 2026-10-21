@@ -162,6 +162,8 @@ static aiplayError parseOrder(
 // validation happens engine-side when the order is applied (research R-2).
 static aiplayError validateOrder(const aiplayOrderRequest *o)
 {
+    const aiplayEngineBackend *be = aiplayBackendGet();
+    const int numPlayers = be ? be->numPlayers() : 0;
     if (!aiplaySessionReady())
     {
         return aiplayError_noSession;
@@ -212,15 +214,22 @@ static aiplayError validateOrder(const aiplayOrderRequest *o)
         }
         break;
     case aiplayVerb_ruTransfer:
-        if (o->playerIndex < 0 || o->amount <= 0)
+        if (o->playerIndex < 0 || o->playerIndex >= numPlayers ||
+            o->playerIndex == aiplayBoundPlayer())
         {
-            return aiplayError_badRequest;
+            return aiplayError_badId;
+        }
+        if (o->amount <= 0 ||
+            (be ? be->playerResourceUnits(aiplayBoundPlayer()) : 0) < o->amount)
+        {
+            return aiplayError_unaffordable;
         }
         break;
     case aiplayVerb_alliance:
-        if (o->playerIndex < 0)
+        if (o->playerIndex < 0 || o->playerIndex >= numPlayers ||
+            o->playerIndex == aiplayBoundPlayer())
         {
-            return aiplayError_badRequest;
+            return aiplayError_badId;
         }
         break;
     case aiplayVerb_attack:

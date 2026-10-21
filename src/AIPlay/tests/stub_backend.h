@@ -13,6 +13,7 @@ const aiplayEngineBackend *stubBackendGet(void);
 aiplayOrderRequest *      stubLastDispatch(void);
 extern int      stubDispatchCount;
 void            stubSetRunning(bool running);
+void            stubSetRUs(int i, int64_t ru);
 void            stubSetPaused(bool paused);
 void            stubSetNumPlayers(int n);
 void            stubSetAlive(int i, bool a);

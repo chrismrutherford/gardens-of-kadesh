@@ -80,6 +80,7 @@ void stubBackendReset(void)
 aiplayOrderRequest *stubLastDispatch(void) { return &lastDispatch; }
 int                 stubNeutrealizedIndex(void) { return stubNeutralized; }
 void stubSetRunning(bool running)   { stubRunning = running; }
+void stubSetRUs(int i, int64_t ru)  { if (i < 8) stubRUs[i] = ru; }
 void stubSetPaused(bool paused)     { stubPaused = paused; }
 void stubSetNumPlayers(int n)       { stubNumPlayers = n; }
 void stubSetAlive(int i, bool a)    { stubAlive[i] = a; }
