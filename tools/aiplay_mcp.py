@@ -11,82 +11,99 @@ Usage: python3 tools/aiplay-mcp.py [--socket PATH] [--port N]
 import argparse
 import json
 import socket
+import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+sys.path.insert(0, __import__("os").path.dirname(__import__("os").path.abspath(__file__)))
+import aiplay_protocol as P  # noqa: E402
+
 PROTO = "2025-06-18"
-SERVER_INFO = {"name": "aiplay-mcp", "version": "0.1.0"}
+SERVER_INFO = {"name": "aiplay-mcp", "version": "1.0.0"}
 
 SOCKET_PATH = "/tmp/homeworld-aiplay.sock"
 _lock = threading.Lock()
 
-TOOLS = [
-    ("bind_session",  "Bind the AI to one player side of the running match", {"playerIndex": {"type": "integer", "description": "player to control (default 0)"}}),
-    ("game_status",   "Session + match status (running/paused/tick/map)", {}),
-    ("observe",       "Full battlefield snapshot: ships, resources, players, match status", {"sections": {"type": "array", "description": "optional: ships/resources"}, "owner": {"type": "integer", "description": "optional owner filter"}}),
-    ("get_events",    "Lifecycle + order events (matchOver, shipDestroyed, orderApplied...)", {}),
-    ("order_move",    "Move ships to a coordinate", {"ships": {"type": "array"}, "target": {"type": "array"}, "id": {"type": "integer"}}),
-    ("order_attack",  "Attack target ships", {"ships": {"type": "array"}, "target": {"type": "integer"}, "id": {"type": "integer"}}),
-    ("order_guard",   "Guard/protect a target ship", {"ships": {"type": "array"}, "target": {"type": "integer"}, "id": {"type": "integer"}}),
-    ("order_dock",    "Dock (incl. resource deposit)", {"ships": {"type": "array"}, "dockWith": {"type": "integer"}, "id": {"type": "integer"}}),
-    ("order_harvest", "Harvest a resource", {"ships": {"type": "array"}, "target": {"type": "integer"}, "id": {"type": "integer"}}),
-    ("order_special", "Trigger special abilities", {"ships": {"type": "array"}, "target": {"type": "integer"}, "id": {"type": "integer"}}),
-    ("order_halt",    "Halt ships", {"ships": {"type": "array"}, "id": {"type": "integer"}}),
-    ("order_build",   "Build a ship type", {"ships": {"type": "array"}, "type": {"type": "string"}, "quantity": {"type": "integer"}, "id": {"type": "integer"}}),
-    ("order_research","Start researching a technology", {"ships": {"type": "array"}, "tech": {"type": "string"}, "id": {"type": "integer"}}),
-    ("order_formation", "Set formation", {"ships": {"type": "array"}, "formation": {"type": "string"}, "id": {"type": "integer"}}),
-    ("pause",         "Pause the simulation", {}),
-    ("resume",        "Resume the simulation", {}),
-    ("step",          "Advance N ticks while paused", {"ticks": {"type": "integer"}}),
-    ("save_game",     "Save the match (autosave every ~10 minutes)",
-     {"name": {"type": "string", "description": "savegame name (max 64 chars safe chars)"}}),
-    ("order_tactics", "Set combat tactics for ships (aggressive/neutral/evasive)",
-     {"ships": {"type": "array"}, "tactics": {"type": "string"}, "id": {"type": "integer"}}),
-    ("order_launch",  "Launch all docked fighters from a dock-capable ship",
-     {"ships": {"type": "array", "description": "the carrier/mothership id"}, "id": {"type": "integer"}}),
-    ("autolaunch",    "Toggle auto-launch of new fighters (on/off)",
-     {"onOff": {"type": "boolean"}, "id": {"type": "integer"}}),
-    ("order_scuttle", "Scuttle (self-destruct) ships — last resort",
-     {"ships": {"type": "array"}, "id": {"type": "integer"}}),
-]
-
-VERB_FOR_TOOL = {
-    "order_move": "move", "order_attack": "attack", "order_guard": "guard",
-    "order_tactics": "tactics", "order_launch": "launch",
-    "order_scuttle": "scuttle", "autolaunch": "autolaunch",
-    "order_dock": "dock", "order_harvest": "harvest", "order_special": "special",
-    "order_halt": "halt", "order_build": "build", "order_research": "research",
-    "order_formation": "formation",
+# TOOLS is generated from the single-source registry (spec 003 FR-008/F-012);
+# never hand-edit the tool list — extend aiplay_protocol.REGISTRY instead.
+DESCRIPTIONS = {
+    "bind_session": "Bind the AI to one player side of the running match",
+    "game_status": "Session + match status (running/paused/tick/map)",
+    "observe": "Full battlefield snapshot: ships, resources, players, match status",
+    "get_events": "Lifecycle + order events (matchOver, shipDestroyed, orderApplied...)",
+    "order_move": "Move ships to a coordinate",
+    "order_attack": "Attack target ships",
+    "order_guard": "Guard/protect a target ship",
+    "order_dock": "Dock (incl. resource deposit)",
+    "order_harvest": "Harvest a resource",
+    "order_special": "Trigger special abilities",
+    "order_halt": "Halt ships",
+    "order_build": "Build a ship type",
+    "order_research": "Start researching a technology",
+    "order_formation": "Set formation",
+    "pause": "Pause the simulation",
+    "resume": "Resume the simulation",
+    "step": "Advance N ticks while paused",
+    "save_game": "Save the match (autosave every ~10 minutes)",
+    "order_tactics": "Set combat tactics for ships (aggressive/neutral/evasive)",
+    "order_launch": "Launch all docked fighters from a dock-capable ship",
+    "autolaunch": "Toggle auto-launch of new fighters (on/off)",
+    "order_scuttle": "Scuttle (self-destruct) ships — last resort",
+    "order_select": "Layer-side selection (no engine state change)",
+    "order_kamikaze": "Set kamikaze mode on ships — one-way attack",
+    "order_parade": "Set military parade (form up) on ships",
+    "order_ru_transfer": "Transfer RUs to another player (multiplayer)",
+    "order_alliance": "Offer/break alliance with another player (multiplayer)",
+    "order_hyperspace": "Near-jump/hyperspace ships to a coordinate (MP funnel)",
 }
 
-METHOD_FOR_TOOL = {
-    "bind_session": "aiSession.bind", "game_status": "aiSession.status",
-    "observe": "state.snapshot", "get_events": "state.events",
-    "pause": "time.pause", "resume": "time.resume", "step": "time.step",
-    "save_game": "game.save",
-}
+_JSONTYPE = {"string": "string", "integer": "integer", "boolean": "boolean",
+             "array": "array"}
+
+
+def _tools_from_registry():
+    def schema_for(tool):
+        out = {}
+        params = (P.REGISTRY["params"].get(tool)
+                  or P.REGISTRY["order_tools"].get(tool, {}).get("params"))
+        for key, rule in (params or {}).items():
+            entry = {"type": _JSONTYPE[rule["type"]]}
+            if rule.get("required"):
+                entry["description"] = "required"
+            if rule.get("min") is not None:
+                entry["description"] = entry.get("description", "") + \
+                    " (>= %d)" % rule["min"]
+            out[key] = entry
+        if P._is_order(tool):
+            out.setdefault("id", {"type": "integer",
+                                  "description": "order id echoed in events"})
+        return out
+    tools = []
+    order = list(P.REGISTRY["state_tools"]) + list(P.REGISTRY["order_tools"])
+    for name in order:
+        desc = DESCRIPTIONS.get(name, name)
+        mp = P.REGISTRY["order_tools"].get(name, {}).get("mp_only")
+        if mp:
+            desc += " [multiplayer]"
+        tools.append((name, desc, schema_for(name)))
+    return tools
+
+
+TOOLS = _tools_from_registry()
 
 
 def relay(request: dict) -> dict:
+    """MCP request -> engine via the single-source encoder/decoder."""
     method = request.get("method", "")
     tool = method[6:] if method.startswith("tools/") else method
-    name = tool if tool in METHOD_FOR_TOOL or tool in VERB_FOR_TOOL else request.get("tool", "")
     params = dict(request.get("params", {}) or {})
-    # keep params.id intact for order tools (the engine echoes it in events);
-    # only use it as the envelope id when it's a plain number
-    raw_id = params.get("id")
-    req_id = raw_id if isinstance(raw_id, (int, float)) else 1
-    if not isinstance(params.get("id"), (int, float)):
-        params.pop("id", None)
 
-    if name in METHOD_FOR_TOOL:
-        wire = {"id": req_id, "method": METHOD_FOR_TOOL[name]}
-        if params:
-            wire["params"] = params
-    elif name in VERB_FOR_TOOL:
-        wire = {"id": req_id, "method": "order." + VERB_FOR_TOOL[name], "params": params}
-    else:
-        return {"ok": False, "error": f"unknown tool {name}"}
+    if tool not in P.REGISTRY["state_tools"] \
+            and tool not in P.REGISTRY["order_tools"]:
+        tool = request.get("tool", "")
+    wire = P.encode_call(tool, params)
+    if "error" in wire:
+        return {"ok": False, **wire}
 
     line = (json.dumps(wire) + "\n").encode()
     sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -107,16 +124,16 @@ def relay(request: dict) -> dict:
 
 
 def call_tool(name: str, arguments: dict) -> dict:
-    payload = params = dict(arguments or {})
-    payload.setdefault("id", name + "-1")
-    if name in VERB_FOR_TOOL:
+    if name in P.REGISTRY["order_tools"]:
         payload = dict(arguments or {})
         payload.setdefault("id", 1)
         payload["ships"] = payload.get("ships", [])
         request = {"method": "tools/" + name, "params": payload}
         res = relay(request)
     else:
-        res = relay({"method": name, "params": payload})
+        params = dict(arguments or {})
+        params.setdefault("id", name + "-1")
+        res = relay({"method": name, "params": params})
     text = json.dumps(res, indent=2)
     return {"content": [{"type": "text", "text": text}]}
 

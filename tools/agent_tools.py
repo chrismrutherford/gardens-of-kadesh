@@ -125,6 +125,35 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "ships": {"type": "array", "items": {"type": "integer"}}, "id": {"type": "integer"}}}}},
     {"type": "function", "function": {
+        "name": "order_kamikaze",
+        "description": "Set kamikaze on fighters: one-way ramming attack",
+        "parameters": {"type": "object", "properties": {
+            "ships": {"type": "array", "items": {"type": "integer"}}, "id": {"type": "integer"}}}}},
+    {"type": "function", "function": {
+        "name": "order_parade",
+        "description": "Set military parade (form up around mothership)",
+        "parameters": {"type": "object", "properties": {
+            "ships": {"type": "array", "items": {"type": "integer"}}, "id": {"type": "integer"}}}}},
+    {"type": "function", "function": {
+        "name": "order_ru_transfer",
+        "description": "Transfer RUs to another player (multiplayer only)",
+        "parameters": {"type": "object", "properties": {
+            "to": {"type": "integer", "description": "target player index"},
+            "amount": {"type": "integer"}, "id": {"type": "integer"}}}}},
+    {"type": "function", "function": {
+        "name": "order_alliance",
+        "description": "Offer/break alliance with another player (multiplayer only)",
+        "parameters": {"type": "object", "properties": {
+            "player": {"type": "integer"}, "onOff": {"type": "boolean"},
+            "id": {"type": "integer"}}}}},
+    {"type": "function", "function": {
+        "name": "order_hyperspace",
+        "description": "Near-jump/hyperspace ships to a coordinate (multiplayer funnel)",
+        "parameters": {"type": "object", "properties": {
+            "ships": {"type": "array", "items": {"type": "integer"}},
+            "target": {"type": "array", "items": {"type": "number"},
+                       "description": "dest [x,y,z]"}, "id": {"type": "integer"}}}}},
+    {"type": "function", "function": {
         "name": "save_game",
         "description": "Save the match to a named savegame (call when nagged)",
         "parameters": {"type": "object", "properties": {

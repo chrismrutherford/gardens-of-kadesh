@@ -449,7 +449,8 @@ def ships_already_executing(args, verb, snap):
 
 TOOL_VERB = {"order_move": "move", "order_attack": "attack",
              "order_guard": "guard", "order_dock": "dock",
-             "order_harvest": "harvest", "order_special": "special"}
+             "order_harvest": "harvest", "order_special": "special",
+             "order_kamikaze": "kamikaze", "order_parade": "parade"}
 
 
 _QUEUE_TOOLS = {"queue_done", "queue_fail"}

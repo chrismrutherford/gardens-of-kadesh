@@ -8,34 +8,34 @@ conformance, SC-001 coverage) and constitution III (test-first, NON-NEGOTIABLE).
 
 ## Phase 1: Setup
 
-- [ ] T001 Commit the carried session fixes (pid files, 16-call cap,
+- [x] T001 Commit the carried session fixes (pid files, 16-call cap,
   thinking-off retry, analyst full snapshot) as a clean baseline commit on
   feat/full-coverage-mcp
-- [ ] T002 Create `tools/aiplay_protocol.py` skeleton: module doc, exports
+- [x] T002 Create `tools/aiplay_protocol.py` skeleton: module doc, exports
   (REGISTRY, encode_call, decode_call, encode_result, decode_result,
   ERROR_CODES, VERBS), no logic yet per plan.md structure
 
 ## Phase 2: Foundational (blocking)
 
-- [ ] T003 In `tools/aiplay_protocol.py` build REGISTRY: complete tool table
+- [x] T003 In `tools/aiplay_protocol.py` build REGISTRY: complete tool table
   (session/state/time per contracts/mcp-surface.md §1; 15 existing order verbs
   + 5 new verbs §2) each with UDS method, funnel name, param schema
   (types/optionality/defaults per data-model.md), read_only flag, mp_only flag
-- [ ] T004 In `tools/aiplay_protocol.py` implement encode_call/decode_call:
+- [x] T004 In `tools/aiplay_protocol.py` implement encode_call/decode_call:
   MCP tool call → UDS `{id,method,params}` wire message; envelope-id vs
   order-id namespace split (order tools keep `id` in params and use it as
   envelope id only when numeric, per sidecar relay() current semantics);
   onOff boolean→"on"/"off" coercion
-- [ ] T005 In `tools/aiplay_protocol.py` implement encode_result/decode_result:
+- [x] T005 In `tools/aiplay_protocol.py` implement encode_result/decode_result:
   UDS `{id,result}|{id,error}` → MCP result payload; expose
   ERROR_CODES map enum↔string (0 none … 9 E_INTERNAL, strings per aiplay.c:31)
-- [ ] T006 Create `tools/tests/test_aiplay_protocol.py`: (a) coverage test —
+- [x] T006 Create `tools/tests/test_aiplay_protocol.py`: (a) coverage test —
   REGISTRY covers every clWrap funnel (list hardcoded from CommandWrap.h) 1:1
   (SC-001); (b) round-trip test — decode(encode(x)) identity for every
   registry tool call (SC-002); (c) schema conformance — valid/invalid param
   samples per verb (≥2 valid, ≥3 invalid, SC-003). Tests must FAIL before
   T003–T005 land (constitution III)
-- [ ] T007 Refactor `tools/aiplay_mcp.py` to source TOOLS + relay() mapping
+- [x] T007 Refactor `tools/aiplay_mcp.py` to source TOOLS + relay() mapping
   from aiplay_protocol (delete duplicated hand table; FR-008 no-drift); keep
   HTTP surface behavior identical; run `tools/tests/test_agent_multi.py` green
 
