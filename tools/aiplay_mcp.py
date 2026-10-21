@@ -26,36 +26,31 @@ _lock = threading.Lock()
 
 # TOOLS is generated from the single-source registry (spec 003 FR-008/F-012);
 # never hand-edit the tool list — extend aiplay_protocol.REGISTRY instead.
-DESCRIPTIONS = {
-    "bind_session": "Bind the AI to one player side of the running match",
-    "game_status": "Session + match status (running/paused/tick/map)",
-    "observe": "Full battlefield snapshot: ships, resources, players, match status",
-    "get_events": "Lifecycle + order events (matchOver, shipDestroyed, orderApplied...)",
-    "order_move": "Move ships to a coordinate",
-    "order_attack": "Attack target ships",
-    "order_guard": "Guard/protect a target ship",
-    "order_dock": "Dock (incl. resource deposit)",
-    "order_harvest": "Harvest a resource",
-    "order_special": "Trigger special abilities",
-    "order_halt": "Halt ships",
-    "order_build": "Build a ship type",
-    "order_research": "Start researching a technology",
-    "order_formation": "Set formation",
-    "pause": "Pause the simulation",
-    "resume": "Resume the simulation",
-    "step": "Advance N ticks while paused",
-    "save_game": "Save the match (autosave every ~10 minutes)",
-    "order_tactics": "Set combat tactics for ships (aggressive/neutral/evasive)",
-    "order_launch": "Launch all docked fighters from a dock-capable ship",
-    "autolaunch": "Toggle auto-launch of new fighters (on/off)",
-    "order_scuttle": "Scuttle (self-destruct) ships — last resort",
-    "order_select": "Layer-side selection (no engine state change)",
-    "order_kamikaze": "Set kamikaze mode on ships — one-way attack",
-    "order_parade": "Set military parade (form up) on ships",
-    "order_ru_transfer": "Transfer RUs to another player (multiplayer)",
-    "order_alliance": "Offer/break alliance with another player (multiplayer)",
-    "order_hyperspace": "Near-jump/hyperspace ships to a coordinate (MP funnel)",
-}
+# Descriptions also come from the registry (LLM-facing per descriptions/
+# dicts); the `guide` tool serves the community docs (playbook/dictionary/
+# strategy digest) to any LLM client.
+GUIDE_DOCS = [
+    "documentation/community/ai-playbook.md",
+    "documentation/community/ai-strategy-digest.md",
+    "documentation/community/ai-snapshot-dictionary.md",
+]
+
+
+def _read_docs():
+    here = __import__("os").path.dirname(__import__("os").path.abspath(__file__))
+    root = __import__("os").path.dirname(here)
+    parts, missing = [], []
+    for rel in GUIDE_DOCS:
+        path = __import__("os").path.join(root, rel)
+        try:
+            with open(path) as f:
+                parts.append("### %s\n\n%s" % (rel, f.read()))
+        except OSError:
+            missing.append(rel)
+    if missing:
+        parts.append("(missing: %s)" % ", ".join(missing))
+    return "\n\n---\n\n".join(parts)
+
 
 _JSONTYPE = {"string": "string", "integer": "integer", "boolean": "boolean",
              "array": "array"}
@@ -67,25 +62,38 @@ def _tools_from_registry():
         params = (P.REGISTRY["params"].get(tool)
                   or P.REGISTRY["order_tools"].get(tool, {}).get("params"))
         for key, rule in (params or {}).items():
-            entry = {"type": _JSONTYPE[rule["type"]]}
-            if rule.get("required"):
-                entry["description"] = "required"
+            entry = {"type": _JSONTYPE[rule["type"]],
+                     "description": rule.get("desc") or key}
             if rule.get("min") is not None:
-                entry["description"] = entry.get("description", "") + \
-                    " (>= %d)" % rule["min"]
+                entry["minimum"] = rule["min"]
             out[key] = entry
         if P._is_order(tool):
-            out.setdefault("id", {"type": "integer",
-                                  "description": "order id echoed in events"})
+            out.setdefault("id", {
+                "type": "integer",
+                "description": P.ID_D or "order id echoed in events"})
         return out
+
+    def tool_entry(name, desc, params):
+        return {"name": name, "description": desc,
+                "inputSchema": {"type": "object", "properties": params,
+                                "additionalProperties": True}}
+
     tools = []
-    order = list(P.REGISTRY["state_tools"]) + list(P.REGISTRY["order_tools"])
-    for name in order:
-        desc = DESCRIPTIONS.get(name, name)
+    for name in list(P.REGISTRY["state_tools"]) + \
+            list(P.REGISTRY["local_tools"]) + list(P.REGISTRY["order_tools"]):
+        for src, key in ((P.REGISTRY["descriptions"]["state_tools"],
+                          "state_tools"),
+                         (P.REGISTRY["descriptions"]["local_tools"],
+                          "local_tools"),
+                         (P.REGISTRY["order_tools"], "order_tools")):
+            if name in src:
+                desc = src[name] if key != "order_tools" else \
+                    src[name]["desc"]
+                break
         mp = P.REGISTRY["order_tools"].get(name, {}).get("mp_only")
         if mp:
             desc += " [multiplayer]"
-        tools.append((name, desc, schema_for(name)))
+        tools.append(tool_entry(name, desc, schema_for(name)))
     return tools
 
 
@@ -124,16 +132,9 @@ def relay(request: dict) -> dict:
 
 
 def call_tool(name: str, arguments: dict) -> dict:
-    if name in P.REGISTRY["order_tools"]:
-        payload = dict(arguments or {})
-        payload.setdefault("id", 1)
-        payload["ships"] = payload.get("ships", [])
-        request = {"method": "tools/" + name, "params": payload}
-        res = relay(request)
-    else:
-        params = dict(arguments or {})
-        params.setdefault("id", name + "-1")
-        res = relay({"method": name, "params": params})
+    if name == "guide":
+        return {"content": [{"type": "text", "text": _read_docs()}]}
+    res = relay({"method": "tools/" + name, "params": dict(arguments or {})})
     text = json.dumps(res, indent=2)
     return {"content": [{"type": "text", "text": text}]}
 
@@ -171,12 +172,10 @@ class Handler(BaseHTTPRequestHandler):
                     "protocolVersion": PROTO,
                     "capabilities": {"tools": {}},
                     "serverInfo": SERVER_INFO,
+                    "instructions": P.INSTRUCTIONS,
                 }
             elif method == "tools/list":
-                result = {"tools": [
-                    {"name": n, "description": d, "inputSchema": {"type": "object",
-                     "properties": s or {}, "additionalProperties": True}}
-                    for n, d, s in TOOLS]}
+                result = {"tools": TOOLS}
             elif method == "tools/call":
                 call = req.get("params", {})
                 try:

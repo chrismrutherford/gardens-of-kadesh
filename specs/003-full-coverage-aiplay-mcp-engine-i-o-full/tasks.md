@@ -54,13 +54,13 @@ snapshot/event schemas with no caps or hand filters on the layer side.
 
 - [x] T008 [US1] Add fixtures: capture live state.snapshot/state.events
   responses into `tools/tests/fixtures/aiplay/*.json` (5+ samples incl. mid-battle)
-- [ ] T009 [P] [US1] In `tools/aiplay_protocol.py` add snapshot schema
+- [x] T009 [P] [US1] In `tools/aiplay_protocol.py` add snapshot schema
   validator (validate_snapshot/validate_events per data-model.md field tables,
   incl. health clamp rule and order-verb enum)
-- [ ] T010 [US1] Verify observe passthrough returns filtered/complete results;
+- [x] T010 [US1] Verify observe passthrough returns filtered/complete results;
   remove any sidecar-side truncation; wire validator into sidecar response
   path (fail loud on schema drift)
-- [ ] T011 [US1] Parity test tool in `tools/tests/test_aiplay_protocol.py`:
+- [x] T011 [US1] Parity test tool in `tools/tests/test_aiplay_protocol.py`:
   MCP observe == raw UDS snapshot (fields, values) on recorded fixtures
 
 **Checkpoint**: US1 complete — opencode sees the whole world faithfully.
