@@ -225,6 +225,17 @@ void aiplayEngineSyncShips(void)
     }
 }
 
+// backend owner derivation: ships belong to a player, resources are unowned
+static int backendOwnerOf(void *opaque)
+{
+    SpaceObj *obj = (SpaceObj *)opaque;
+    if (obj->header.objtype == OBJ_ShipType)
+    {
+        return (int)((Ship *)opaque)->playerowner->playerIndex;
+    }
+    return -1;
+}
+
 // per-ship current order from the command layer's CommandToDo list (T020)
 // (declared below; ships' order targets resolve through the id map)
 static bool backendObjectLive(void *opaque);
@@ -257,6 +268,12 @@ static void fillShipOrder(Ship *ship, aiplayShipInfo *out)
         }
         switch (todo->ordertype.order)
         {
+        case COMMAND_NULL:
+            // orphaned/consumed command entry: the ship's real order, if any,
+            // lives further down the todolist. Reporting it as an order hides
+            // idle ships behind a fake "order?" verb (agents then refuse to
+            // re-task them — lost a HeavyInterceptor group this way).
+            continue;
         case COMMAND_MOVE:
             out->orderVerb = "move";
             out->orderCoord[0] = todo->move.destination.x;
@@ -272,7 +289,10 @@ static void fillShipOrder(Ship *ship, aiplayShipInfo *out)
                 void *target = todo->attack->TargetPtr[0];
                 if (target != NULL && backendObjectLive(target))
                 {
-                    out->orderTargetId = aiplayIdTouch(target, 0);
+                    // touch with the target's REAL owner: a hardcoded owner
+                    // here poisons the id map (enemy ships / mined asteroids
+                    // flipped to owner 0 in their next snapshot)
+                    out->orderTargetId = aiplayIdTouch(target, backendOwnerOf(target));
                 }
             }
             break;
@@ -281,10 +301,10 @@ static void fillShipOrder(Ship *ship, aiplayShipInfo *out)
             if (todo->collect.resource != NULL)
             {   // CollectResourceCommand is a VALUE member carrying one ResourcePtr;
                 // mapped id (FR-013a), not the raw ResourcePtr
-                if (backendObjectLive((void *)todo->collect.resource))
+                void *res = (void *)todo->collect.resource;
+                if (backendObjectLive(res))
                 {
-                    out->orderTargetId =
-                        aiplayIdTouch((void *)todo->collect.resource, 0);
+                    out->orderTargetId = aiplayIdTouch(res, backendOwnerOf(res));
                 }
             }
             break;
@@ -302,6 +322,9 @@ static void fillShipOrder(Ship *ship, aiplayShipInfo *out)
             break;
         case COMMAND_MILITARY_PARADE:
             out->orderVerb = "parade";
+            break;
+        case COMMAND_MP_HYPERSPACING:
+            out->orderVerb = "hyperspace";
             break;
         default:
             out->orderVerb = "order?";

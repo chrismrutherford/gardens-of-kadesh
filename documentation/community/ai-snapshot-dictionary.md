@@ -22,7 +22,7 @@ fields (compression in tools/agent.py `compress_snapshot`).
 | Field        | Meaning |
 |--------------|---------|
 | `id`         | ship id used in every order tool; invalid after any match reset |
-| `owner`      | player index (equal to bound player = your side) |
+| `owner`      | player index (equal to bound player = your side); resources/asteroids are always `-1` (unowned — owner is a ship-only field) |
 | `type`       | ship class name (matches Build Manager list) |
 | `pos`,`vel`  | position/velocity [x,y,z] |
 | `health`,`healthMax` | current/max hit points |
@@ -48,8 +48,11 @@ fields (compression in tools/agent.py `compress_snapshot`).
 - `{"verb":"passive-attack"}` — moving but set to return fire; a ship
   RETURNING FIRE also carries `targetId` = the attacker id: the
   under-attack signal (see FR-014 spec 003)
-- `{"verb":"order?"}` — unrecognized command (treat as busy-unknown;
-  use formation/scuttle awareness)
+- `{"verb":"order?"}` — unrecognized command: genuinely outside the mapped
+  verb set (COMMAND_NULL orphans are SKIPPED and no longer emitted here:
+  `null` and the next real order win; only engine commands without a mapping
+  surface this now). Treat as busy-unknown and re-task.
+- `{"verb":"hyperspace"}` — the ship is mid near-jump (MP)
 - `"STUCK-move-to-origin"` (compressed view) — the move order points near
   [0,0,0]: a bad order; re-issue
 
@@ -87,7 +90,7 @@ engine pointers here — >2^48 values; treat any such value as stale data).
 | `bindChanged` | binding state changed |
 | `orderApplied` | order id executed |
 | `orderRejected` | order id FAILED; aux = engine error enum: 2=E_BAD_ID, 3=E_UNAFFORDABLE, 4=E_NO_BUILDER, 5=E_NO_LABS, 6=E_MATCH_OVER, 7=E_QUEUE_FULL, 8=E_BAD_REQUEST, 9=E_INTERNAL (see tools/aiplay_protocol.py ERROR_ENUM_TO_CODE) |
-| `shipDestroyed` | id destroyed; aux = killer owner +1, owner = victim |
+| `shipDestroyed` | id destroyed; aux = killer owner +1, owner = victim; aux 0 = no killer attributed (non-combat death — collision, stale/unseen eviction) |
 | `matchOver` | match ended; aux = winner index + 1 (0 = draw/unknown) |
 
 Order results carry error strings directly: `E_NO_SESSION`, `E_BAD_ID`

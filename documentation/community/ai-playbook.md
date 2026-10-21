@@ -83,7 +83,8 @@ IonFr         <- Chassis3 + IonWeapons
 
 ## Opening playbook (tick 0):
 1. Build 2x ResourceCollector (650 RU each) — queue both; RU starts 1000,
-   collector pays ~100+ RU/min once harvesting (income stat in snapshot).
+   collector pays ~100+ RU/min once harvesting (verify via `order: harvest`
+   — build-spends make the income stat swing, see dictionary).
 2. Build ResearchShip next (700) — labs make research possible.
 3. Research MassDrive1Kt -> Chassis1 while collectors build.
 4. Keep 2-3 interceptors on CAPSLOCK-visible... fleet: order_tactics aggressive.
@@ -93,6 +94,9 @@ IonFr         <- Chassis3 + IonWeapons
 ## Notes
 - Fighters BUILD DOCKED: order_launch the Mothership after builds finish
   (or autolaunch on once at game start).
-- Snapshot 'income' = RU/min (own side). Negative/0 income = no harvesting happening.
+- Snapshot 'income' = NET RU-bank delta per minute (own side), NOT a harvest
+  rate: build spends show as negative, engine/map RU injections show as
+  spikes. Do not read "high income" as "my collectors are working" — verify
+  harvesting by collector `order: harvest` verbs instead.
 - paused snapshots are byte-identical; use pause only when re-planning.
 - Order ids are echoed in events (orderApplied/orderRejected) — read them.

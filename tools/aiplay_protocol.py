@@ -557,6 +557,12 @@ def encode_call(tool, params):
         if wire_params:
             msg["params"] = wire_params
         return msg
+    # on_off coercion at the ENCODE path too: the engine's parseOrder reads
+    # these params with a string getter; a raw JSON boolean never stringifies
+    # and used to be rejected (E_BAD_REQUEST) submit-side
+    for key, rule in _params_for(tool).items():
+        if rule.get("coerce") == "on_off" and key in wire:
+            wire[key] = on_off(wire[key])
     verb = tool[len("order_"):] if tool.startswith("order_") else tool
     return {"id": envelope, "method": "order." + verb, "params": wire}
 

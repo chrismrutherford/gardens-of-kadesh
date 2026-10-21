@@ -116,6 +116,28 @@ class TestRoundTripSC002(unittest.TestCase):
                 wants.pop("id", None)
             self.assertEqual(decoded_params, wants, "drift on %s" % name)
 
+    def test_onoff_stringified_on_wire(self):
+        # regression: the engine's parseOrder reads onOff with a string getter;
+        # a raw JSON boolean on the wire was rejected (E_BAD_REQUEST) submit-side
+        for tool, params in (("autolaunch", {"onOff": True, "id": 21}),
+                             ("autolaunch", {"onOff": False, "id": 22}),
+                             ("order_alliance", {"player": 1, "onOff": True, "id": 23}),
+                             ("order_kamikaze", {"ships": [1], "onOff": True, "id": 24}),
+                             ("order_parade", {"ships": [1], "onOff": False, "id": 25})):
+            wire = P.encode_call(tool, params)
+            # no validation error + params carry the string form
+            self.assertNotIn("error", wire)
+            self.assertIn(wire["params"]["onOff"], ("on", "off"), tool)
+        self.assertEqual(P.encode_call("autolaunch", {"onOff": True})["params"]["onOff"], "on")
+        self.assertEqual(P.encode_call("autolaunch", {"onOff": False})["params"]["onOff"], "off")
+
+    def test_build_shipless_waits_for_engine_default(self):
+        # regression: build without ships must pass the protocol layer (the
+        # engine defaults the builder to the bound player's Mothership)
+        wire = P.encode_call("order_build", {"type": "ResourceCollector", "id": 26})
+        self.assertNotIn("error", wire)
+        self.assertEqual(wire["method"], "order.build")
+
     def test_result_round_trip(self):
         self.assertEqual(P.decode_result(
             {"id": 1, "result": {"queued": True, "orderId": 5}}),

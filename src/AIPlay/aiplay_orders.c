@@ -118,9 +118,18 @@ static aiplayError parseOrder(
                         : (aiplayJsonGet(doc, params, "tech") >= 0 ? "tech" : "onOff")));
         aiplayJsonGetString(doc, params, key, out->name, AIPLAY_MAX_NAME);
         if (strcmp(key, "onOff") == 0)
-        {   // autolaunch on/off comes as a boolean or the strings on/off
-            if (strcmp(out->name, "1") == 0) { strcpy(out->name, "on"); }
-            if (strcmp(out->name, "0") == 0) { strcpy(out->name, "off"); }
+        {   // on/off comes as a boolean, the strings on/off, or 1/0; a JSON
+            // boolean never stringifies (GetString leaves name empty) and
+            // must be read from the node directly
+            int32_t node = aiplayJsonGet(doc, params, key);
+            if (node >= 0 && doc->nodes[node].type == aiplayJson_bool)
+            {
+                strcpy(out->name, doc->nodes[node].b ? "on" : "off");
+            }
+            else if (strcmp(out->name, "1") == 0) { strcpy(out->name, "on"); }
+            else if (strcmp(out->name, "0") == 0) { strcpy(out->name, "off"); }
+            else if (strcmp(out->name, "true") == 0) { strcpy(out->name, "on"); }
+            else if (strcmp(out->name, "false") == 0) { strcpy(out->name, "off"); }
         }
         out->targetKind = aiplayTarget_name;
     }
@@ -183,6 +192,9 @@ static aiplayError validateOrder(const aiplayOrderRequest *o)
     case aiplayVerb_autolaunch:
     case aiplayVerb_ruTransfer:
     case aiplayVerb_alliance:
+    case aiplayVerb_build:
+        // build: shipless orders default the builder to the bound player's
+        // Mothership (engine backendDispatchOrder handles the fallback)
         break;  // fleet-wide commands do not need ship ids
     default:
         if (o->numShips == 0)

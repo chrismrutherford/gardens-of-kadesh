@@ -62,7 +62,7 @@ class TestMcp(unittest.TestCase):
         self.assertEqual(inner["result"]["ships"][0]["type"], "Interceptor")
 
     def test_tool_schema(self):
-        names = [n for n, _, _ in m.TOOLS]
+        names = [t["name"] for t in m.TOOLS]
         self.assertIn("order_build", names)
         self.assertIn("step", names)
 
