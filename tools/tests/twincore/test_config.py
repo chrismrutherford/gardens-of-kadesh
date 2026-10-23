@@ -128,5 +128,64 @@ class TestConfig(unittest.TestCase):
         self.assertTrue(cfg.get("strategist.enabled"))
 
 
+class TestV4Config(unittest.TestCase):
+    """Spec 005 v4: driver section (T002, decision 17)."""
+
+    def test_defaults(self):
+        cfg = C.load_obj(copy.deepcopy(BASE))
+        # FR-007: S2 pulse 90-240s (default 120, ~2min latency), S1 5-15s
+        self.assertEqual(cfg.get("v4.pulse_seconds"), 120)
+        self.assertEqual(cfg.get("v4.micro_pulse_seconds"), 8)
+        self.assertEqual(cfg.get("v4.tick_seconds"), 1)
+        # FR-005: ≤6 validated commands per tick, all channels combined
+        self.assertEqual(cfg.get("v4.max_commands_per_tick"), 6)
+        self.assertEqual(cfg.get("v4.max_repair_attempts"), 1)
+        # FR-006 exact reflex set
+        self.assertEqual(cfg.get("v4.reflexes"),
+                         {"harvest": True, "deliver": True})
+        self.assertTrue(cfg.get("v4.s1_channel.enabled"))
+        # FR-013 budgets + ceilings
+        self.assertEqual(cfg.get("v4.budgets"),
+                         {"s2_in": 12288, "s2_out": 3072, "s1_in": 4096,
+                          "s1_out": 900})
+
+    def test_explicit_values_win(self):
+        cfg = C.load_obj({"v4": {"pulse_seconds": 90,
+                                 "s1_channel": {"enabled": False}}})
+        self.assertEqual(cfg.get("v4.pulse_seconds"), 90)
+        self.assertFalse(cfg.get("v4.s1_channel.enabled"))
+
+    def test_cadence_clamps(self):
+        for bad in ({"v4": {"pulse_seconds": 30}},
+                    {"v4": {"pulse_seconds": 241}},
+                    {"v4": {"micro_pulse_seconds": 4}},
+                    {"v4": {"micro_pulse_seconds": 16}}):
+            with self.assertRaises(C.ConfigError, msg=repr(bad)):
+                C.load_obj(copy.deepcopy(bad))
+
+    def test_budget_ceilings(self):
+        for bad in ({"v4": {"budgets": {"s2_in": 20000}}},
+                    {"v4": {"budgets": {"s1_out": 901}}}):
+            with self.assertRaises(C.ConfigError, msg=repr(bad)):
+                C.load_obj(copy.deepcopy(bad))
+
+    def test_other_v4_validation(self):
+        for bad in ({"v4": {"max_commands_per_tick": 0}},
+                    {"v4": {"max_repair_attempts": 2.5}},
+                    {"v4": {"reflexes": {"harvest": "yes", "deliver": True}}},
+                    {"v4": {"s1_channel": {"enabled": 1}}}):
+            with self.assertRaises(C.ConfigError, msg=repr(bad)):
+                C.load_obj(copy.deepcopy(bad))
+
+    def test_partial_subdicts_deep_merge(self):
+        cfg = C.load_obj({"v4": {"reflexes": {"harvest": False}}})
+        self.assertEqual(cfg.get("v4.reflexes"),
+                         {"harvest": False, "deliver": True})
+
+    def test_tick_seconds_positive_int(self):
+        with self.assertRaises(C.ConfigError):
+            C.load_obj(copy.deepcopy({"v4": {"tick_seconds": 0}}))
+
+
 if __name__ == "__main__":
     unittest.main()

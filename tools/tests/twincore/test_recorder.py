@@ -22,7 +22,8 @@ import twincore.queue as Q  # noqa: E402
 ALL_KINDS = [
     "event_raw", "classification", "delta", "rollup", "digest", "packet",
     "packet_rejected", "revision", "decision", "command", "validation",
-    "usage", "breach", "degradation", "question",
+    "usage", "breach", "degradation", "question", "note",
+    "program", "micro",  # spec 005 v4 (T005)
 ]
 
 HOST = os.environ.get("TWINCORE_PG_HOST", "192.168.1.152")

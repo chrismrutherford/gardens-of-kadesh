@@ -68,7 +68,18 @@ DEFAULTS = {
     "recorder": {"dsn": {"host": "192.168.1.152", "dbname": "twincore_q",
                          "user": "postgres",
                          "connect_timeout": 5}},  # postgres record store
-                                                   # (FR-021/FR-030; no files)
+                                                    # (FR-021/FR-030; no files)
+    "v4": {  # spec 005 three-tier driver (decision 17)
+        "pulse_seconds": 120,       # S2: clamp 90-240 (FR-007, ~2min latency)
+        "micro_pulse_seconds": 8,   # S1: clamp 5-15
+        "tick_seconds": 1,          # executor tick
+        "max_commands_per_tick": 6,  # FR-005, all channels combined
+        "max_repair_attempts": 1,   # ≤1 bounded repair per pulse
+        "reflexes": {"harvest": True, "deliver": True},  # FR-006 exact set
+        "s1_channel": {"enabled": True},  # off ⇒ program + reflexes only
+        "budgets": {"s2_in": 12288, "s2_out": 3072, "s1_in": 4096,
+                    "s1_out": 900},
+    },
     "strategist": {"enabled": False},
     "difficulty": DEFAULT_DIFFICULTY,
 }
@@ -204,6 +215,36 @@ class Config:
         kd = self._d["features"]["kamikaze_draw"]
         if not 0.0 <= kd <= 1.0:
             raise ConfigError("features.kamikaze_draw must be in [0,1]")
+        self._validate_v4()
+
+    def _validate_v4(self):
+        v4 = self._d["v4"]
+        for k in ("pulse_seconds", "micro_pulse_seconds", "tick_seconds",
+                  "max_commands_per_tick", "max_repair_attempts"):
+            v = v4[k]
+            if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+                raise ConfigError("v4.%s must be an int > 0" % k)
+        if not 90 <= v4["pulse_seconds"] <= 240:
+            raise ConfigError("v4.pulse_seconds must be in [90, 240] (FR-007)")
+        if not 5 <= v4["micro_pulse_seconds"] <= 15:
+            raise ConfigError("v4.micro_pulse_seconds must be in [5, 15]")
+        ceilings = {"s2_in": 12288, "s2_out": 3072, "s1_in": 4096,
+                    "s1_out": 900}
+        budgets = v4["budgets"]
+        if set(budgets) != set(ceilings):
+            raise ConfigError("v4.budgets keys must be %s" % sorted(ceilings))
+        for k, ceil in ceilings.items():
+            v = budgets[k]
+            if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+                raise ConfigError("v4.budgets.%s must be an int > 0" % k)
+            if v > ceil:
+                raise ConfigError("v4.budgets.%s exceeds ceiling %d (FR-013)"
+                                  % (k, ceil))
+        for k in ("harvest", "deliver"):
+            if not isinstance(v4["reflexes"][k], bool):
+                raise ConfigError("v4.reflexes.%s must be a bool" % k)
+        if not isinstance(v4["s1_channel"]["enabled"], bool):
+            raise ConfigError("v4.s1_channel.enabled must be a bool")
 
     DEFAULTS = DEFAULTS
 

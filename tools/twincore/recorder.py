@@ -20,6 +20,7 @@ KINDS = (
     "event_raw", "classification", "delta", "rollup", "digest", "packet",
     "packet_rejected", "revision", "decision", "command", "validation",
     "usage", "breach", "degradation", "question", "note",
+    "program", "micro",  # v4 (spec 005): program apply/status, S1 micro
 )
 
 RING_CAP = 512

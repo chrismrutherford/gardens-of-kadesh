@@ -21,6 +21,36 @@ import twincore.queue as Q  # noqa: E402
 import twincore.recorder as R  # noqa: E402
 
 
+import argparse
+import json
+import os
+import sys
+import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import twincore.queue as Q  # noqa: E402
+import twincore.recorder as R  # noqa: E402
+
+KINDS = (  # recorder line kinds (protocol §6 + note)
+    "event_raw", "classification", "delta", "rollup", "digest", "packet",
+    "packet_rejected", "revision", "decision", "command", "validation",
+    "usage", "breach", "degradation", "question", "note",
+)
+
+
+KINDS = ("event_raw", "classification", "delta", "rollup", "digest",
+         "packet", "packet_rejected", "revision", "decision", "command",
+         "validation", "usage", "breach", "degradation", "question", "note",
+         "program", "micro")
+
+
+def _default_kinds():
+    """Default view: decision-quality rows. The raw firehose
+    (event_raw/delta = >90% of volume) is opt-in via --kinds/--all."""
+    return [k for k in KINDS if k not in ("event_raw", "delta")]
+
+
 def fmt(row):
     tick = row.get("tick")
     kind = row.get("kind")
@@ -174,6 +204,8 @@ def main():
     ap = argparse.ArgumentParser(description="tail the postgres match trail")
     ap.add_argument("--match")
     ap.add_argument("--kinds")
+    ap.add_argument("--all", action="store_true",
+                    help="include the event_raw/delta firehose")
     ap.add_argument("--backlog", type=int, default=5)
     ap.add_argument("--digests", action="store_true")
     ap.add_argument("--interval", type=float, default=0.5)
@@ -181,28 +213,28 @@ def main():
     q = Q.Queue(R.DEFAULT_DSN)
     last_id = 0
     match = a.match
-    if match is None:
-        match = newest_match(q)
-        if match is None:
-            print("tail: no recorded match yet; waiting for one")
-        else:
-            print("tail: %s" % match)
-    kinds = a.kinds.split(",") if a.kinds else None
-    if match:
-        for r in _backlog(q, match, a.backlog, kinds):
-            print(fmt(r), flush=True)
-            last_id = max(last_id, r.get("id", 0))
     if a.digests:
         kinds = ["digest"]
+    elif a.kinds:
+        kinds = a.kinds.split(",")
+    elif a.all:
+        kinds = list(KINDS)
+    else:
+        kinds = _default_kinds()
+    kinds_arg = kinds
+    if match:
+        for r in _backlog(q, match, a.backlog, kinds_arg):
+            print(fmt(r), flush=True)
+            last_id = max(last_id, r.get("id", 0))
     try:
         while True:
             if match is None:
                 match = newest_match(q)
                 if match:
-                    print("tail: %s" % match)
+                    print("tail: %s" % match, flush=True)
                 time.sleep(a.interval)
                 continue
-            for r in _poll(q, match, last_id, kinds):
+            for r in _poll(q, match, last_id, kinds_arg):
                 print(fmt(r), flush=True)
                 last_id = max(last_id, r.get("id", 0))
             time.sleep(a.interval)
