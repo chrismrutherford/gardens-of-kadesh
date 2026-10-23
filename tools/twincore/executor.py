@@ -516,16 +516,11 @@ class Executor:
             return True
         if etype == "orderApplied":
             item_id = self._oid_items.get(oid)
-            st = self._item_state.get(item_id) if item_id is not None else None
-            if st is not None and st["verb"] in PRODUCTION_VERBS:
-                # ACCEPTED ≠ retired: a standing PRODUCTION item keeps its
-                # oid in-flight for the program generation so the dedupe
-                # gate stops re-minting it every tick (live lesson: order_
-                # build re-issued ~every 150 ticks, duplicating the engine
-                # build queue). Superseding the program retires it.
-                st["engine_acked"] = True
-                return True
-            self.ledger.mark_command_done(oid)   # accepted, no longer pending
+            if item_id is not None:
+                st = self._item_state.get(item_id)
+                if st is not None:
+                    st["engine_acked"] = True
+            self.ledger.mark_command_done(oid)   # accepted → oid retired
             return True
         return False
 
@@ -700,8 +695,46 @@ class Executor:
                         program_version=st["program_version"],
                         item_id=item["id"], reason="E_NO_BUILDER")
                 return None
+            # STATE-TRUTH dedupe (live lesson 2): an oid acked and gone from
+            # in-flight does NOT mean the build finished — the engine's own
+            # buildQueue does. A standing build item re-issues only when the
+            # engine's queue no longer shows that hull (re-mint guard, part
+            # 2: without this the standing items duplicate the queue).
+            view = self.ledger.as_dict() if self.ledger is not None else {}
+            queue_txt = json.dumps(view.get("buildQueue") or [],
+                                   default=str)
+            hull = params.get("type") or ""
+            if hull and hull in queue_txt:
+                self._note_engine_state(item["id"],
+                                        "engine buildQueue already "
+                                        "contains %s — waiting, no re-mint"
+                                        % hull)
+                return None
             params["ships"] = [bid]
+        else:  # order_research — state-truth: the lab gate
+            view = self.ledger.as_dict() if self.ledger is not None else {}
+            tt = view.get("techTree") or {}
+            if tt.get("canResearch") is False:
+                self._note_engine_state(
+                    item["id"], "research in progress (canResearch="
+                    "False) — waiting, no re-mint")
+                return None
         return {"verb": item["verb"], "params": params}
+
+    def _note_engine_state(self, item_id, note):
+        """Trail hygiene: record an engine-state block once per generation
+        (no verdict spam — the state may free up; the item stays pending)."""
+        st = self._item_state.get(item_id)
+        key = ("engine_state", item_id)
+        if key in self._suppressed:
+            return
+        self._suppressed.add(key)
+        if st is not None:
+            st["engine_state"] = note
+        if self.recorder:
+            self.recorder.record("validation", tick=None, tool="*",
+                                 status="engine_state_blocked",
+                                 item_id=item_id, note=note)
 
     def _tasking_proposal(self, item):
         params = {"ships": list(item["ships"])}

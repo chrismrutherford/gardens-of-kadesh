@@ -363,7 +363,7 @@ class TestDraftV3Executor(unittest.TestCase):
     # -- semantic name denies (FR-020 pre-wire) ----------------------------
     def techtree(self):
         return {
-            "labs": 1, "canResearch": False,
+            "labs": 1, "canResearch": True,
             "researched": ["MassDrive1Kt"],
             "locked": [
                 {"type": "IonCannonFrigate", "disabled": False,
@@ -461,9 +461,9 @@ class TestDraftV3Executor(unittest.TestCase):
         self.assertTrue(any("E_BAD_REQUEST" in v["text"]
                             for v in ex.verdicts()))
 
-    def test_order_applied_flags_acked_keeps_inflight(self):
-        # Draft v3 refinement: orderAccepted does NOT clear PRODUCTION
-        # oids (standing re-mint guard) — supersede does.
+    def test_order_applied_clears_and_marks_acked(self):
+        # state-truth refinement: orderApplied retires the oid; re-mints
+        # are gated by the ENGINE'S OWN buildQueue/canResearch instead.
         led = CF.FakeLedger(CF.v4_ledger(builders=1))
         ex = self._ex(ledger=led)
         ex.set_program(self.make_prog(
@@ -474,13 +474,8 @@ class TestDraftV3Executor(unittest.TestCase):
         self.assertIn(oid, ex.ledger.in_flight())
         self.assertTrue(ex.on_engine_event(
             {"type": "orderApplied", "id": oid}, tick=2))
-        self.assertIn(oid, ex.ledger.in_flight())
-        self.assertTrue(ex.item_status("p1")["engine_acked"])
-        ex.set_program(P.validate_packet(CF.v4_packet(
-            8, production=[{"id": "p1", "verb": "order_build",
-                            "params": {"type": "LightInterceptor"}}]),
-            7), tick=3)
         self.assertNotIn(oid, ex.ledger.in_flight())
+        self.assertTrue(ex.item_status("p1")["engine_acked"])
 
     # -- clamp verdicts ------------------------------------------------------
     def test_clamp_emits_first_verdict(self):
@@ -510,8 +505,15 @@ class TestStandingProductionDedup(ExecutorBase):
     def setUp(self):
         import twincore.executor as E
         self.E = E
+        from test_v4_driver import MemRecorder as MR
+        self._MR = MR
 
-    def test_production_oid_stays_inflight_on_ack(self):
+    def _rec(self):
+        return self._MR()
+
+    def test_build_reissues_after_ack_when_queue_free(self):
+        # state-truth: ack retires the oid; empty engine buildQueue means
+        # the standing item re-issues (continuity of the ramp)
         led = CF.FakeLedger(CF.v4_ledger(builders=1))
         ex = make_executor(self.E.Executor, ledger=led,
                            client=CF.FakeClient())
@@ -520,13 +522,50 @@ class TestStandingProductionDedup(ExecutorBase):
                          "params": {"type": "ResourceCollector"}}],
             tasking=[]), tick=1)
         issued = ex.on_tick(1)
-        oid = issued[0]["command_id"]
-        ex.on_engine_event({"type": "orderApplied", "id": oid}, tick=2)
-        self.assertIn(oid, ex.ledger.in_flight())
-        self.assertEqual(ex.item_status("p1")["resolution"], "applied")
-        # same tick batch again: dedupe CLAMPS the re-propose
-        ex.on_tick(3)
-        self.assertEqual(ex.item_status("p1")["clamped_count"], 1)
+        oid1 = issued[0]["command_id"]
+        ex.on_engine_event({"type": "orderApplied", "id": oid1}, tick=2)
+        second = ex.on_tick(3)
+        self.assertTrue([m for m in second
+                         if m["item_id"] == "p1"])  # re-issued
+
+    def test_build_no_remint_while_engine_queue_busy(self):
+        led = CF.FakeLedger(CF.v4_ledger(builders=1))
+        ex = make_executor(self.E.Executor, ledger=led,
+                           client=CF.FakeClient(),
+                           recorder=self._rec())
+        ex.set_program(self.make_prog(
+            production=[{"id": "p1", "verb": "order_build",
+                         "params": {"type": "ResourceCollector"}}],
+            tasking=[]), tick=1)
+        issued = ex.on_tick(1)
+        self.assertTrue(issued)
+        led.apply_snapshot({"buildQueue": [{"builder": 90,
+                                            "hull": "ResourceCollector"}]})
+        again = ex.on_tick(2)
+        self.assertEqual([m for m in again if m["item_id"] == "p1"], [])
+        rows = ex.recorder.scan(kinds=["validation"]) if ex.recorder \
+            else []
+        self.assertTrue(any(r.get("status") == "engine_state_blocked"
+                            for r in rows))
+
+    def test_research_no_remint_while_lab_busy(self):
+        led = CF.FakeLedger(CF.v4_ledger(builders=1))
+        led.apply_snapshot({"techTree": {"labs": 1, "canResearch": False,
+                                         "researched": [],
+                                         "locked": []}})
+        ex = make_executor(self.E.Executor, ledger=led,
+                           client=CF.FakeClient())
+        ex.set_program(self.make_prog(
+            production=[{"id": "p1", "verb": "order_research",
+                         "params": {"tech": "IonWeapons"}, "once": True}],
+            tasking=[]), tick=1)
+        issued = ex.on_tick(1)
+        self.assertEqual(issued, [])   # lab busy: engine_state gate
+        led.apply_snapshot({"techTree": {"labs": 1, "canResearch": True,
+                                         "researched": [],
+                                         "locked": []}})
+        later = ex.on_tick(2)
+        self.assertTrue([m for m in later if m["item_id"] == "p1"])
 
     def test_supersede_retires_production_oid(self):
         led = CF.FakeLedger(CF.v4_ledger(builders=1))

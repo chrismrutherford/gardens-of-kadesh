@@ -134,6 +134,10 @@ class FakeLedger:
         for p in snapshot.get("players") or []:
             if p.get("resourceUnits") is not None:
                 self._state["bank"] = p["resourceUnits"]
+        if snapshot.get("techTree") is not None:
+            self._state["techTree"] = snapshot["techTree"]
+        if snapshot.get("buildQueue") is not None:
+            self._state["buildQueue"] = snapshot["buildQueue"]
         self._state["ships_all"] = self._ships_all
         self._state["resources"] = self._resources
         return snapshot
