@@ -204,7 +204,12 @@ class PulseLoop:
             with open(base + ".input.json", "w") as fh:
                 json.dump(msgs, fh, indent=1, default=str)
             with open(base + ".raw.txt", "w") as fh:
-                fh.write(str(out.get("raw") or ""))
+                raw = out.get("raw")
+                if isinstance(raw, dict):
+                    fh.write("[content]\n%s\n\n[reasoning]\n%s"
+                             % (raw.get("content"), raw.get("reasoning")))
+                else:
+                    fh.write(str(raw or ""))
             with open(base + ".packet.json", "w") as fh:
                 json.dump(out.get("packet") or {"error": out.get("error")},
                           fh, indent=1, default=str)
