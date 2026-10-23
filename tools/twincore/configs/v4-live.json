@@ -1,6 +1,10 @@
 {
-  "seat": {"player_index": 0},
-  "transport": {"mcp_url": "http://127.0.0.1:8302/mcp"},
+  "seat": {
+    "player_index": 0
+  },
+  "transport": {
+    "mcp_url": "http://127.0.0.1:8302/mcp"
+  },
   "channels": {
     "s2": {
       "url": "http://192.168.2.72:9931/v1/chat/completions",
@@ -28,12 +32,30 @@
     "tick_seconds": 1,
     "max_commands_per_tick": 6,
     "max_repair_attempts": 1,
-    "reflexes": {"harvest": true, "deliver": true},
-    "s1_channel": {"enabled": false},
-    "budgets": {"s2_in": 12288, "s2_out": 3072, "s1_in": 4096, "s1_out": 900}
+    "reflexes": {
+      "harvest": true,
+      "deliver": true
+    },
+    "s1_channel": {
+      "enabled": true
+    },
+    "budgets": {
+      "s2_in": 12288,
+      "s2_out": 3072,
+      "s1_in": 4096,
+      "s1_out": 900
+    }
   },
-  "recorder": {"dsn": {"host": "192.168.1.152", "dbname": "twincore_q",
-                       "user": "postgres", "connect_timeout": 5}},
+  "recorder": {
+    "dsn": {
+      "host": "192.168.1.152",
+      "dbname": "twincore_q",
+      "user": "postgres",
+      "connect_timeout": 5
+    }
+  },
   "difficulty": "intermediate",
-  "strategist": {"enabled": false}
+  "strategist": {
+    "enabled": false
+  }
 }

@@ -104,6 +104,35 @@ class Executor:
         self.reflexes = {"harvest": True, "deliver": True}
         if reflexes:
             self.reflexes.update({k: bool(v) for k, v in reflexes.items()})
+        self._micro_queue = []   # envelope-validated S1 items awaiting a tick
+
+    # -- S1 micro lane (FR-018; contracts/s1-envelope.md §2–3) ---------------
+    def feed_micro(self, applied, version, seq, tick):
+        """Queue envelope-validated S1 items; minted at the next tick as
+        commands citing item_id `s1:mN` + program version.'''
+        """
+        for it in applied:
+            self._micro_queue.append(dict(it, seq=seq, version=version,
+                                          queued_tick=tick))
+
+    def _micro_entries(self, tick):
+        """S1 items → proposals; program wins on shared ships UNLESS the
+        grant carries override_tasking (the priority law, FR-017)."""
+        covered = self._covered_ships()
+        out = []
+        while self._micro_queue:
+            it = self._micro_queue.pop(0)
+            ships = set(it.get("ships") or [])
+            grant = self.program.grant_for(it.get("grant")) \
+                if self.program is not None else None
+            override = bool(grant and grant.get("override_tasking"))
+            if (ships & covered) and not override:
+                continue    # program wins; S1 yield recorded via no-issue
+            out.append(("s1:%s" % it["id"],
+                        self._tasking_proposal(it), "micro",
+                        self.program.version if self.program is not None
+                        else None))
+        return out
 
     # -- program generation ---------------------------------------------
     def set_program(self, program, tick):
@@ -148,20 +177,21 @@ class Executor:
         entries = []
         if self.program is not None:
             entries += self._program_entries(tick)
+        entries += self._micro_entries(tick)
         entries += self._reflex_entries(tick)
         if not entries:
             return []
         results = self.validator.validate_batch(
-            [p for _it, p, _k in entries if p is not None], self.ledger)
+            [p for _it, p, _k, _v in entries if p is not None], self.ledger)
         issued = []
         idx = 0
-        for item_id, proposal, kind in entries:
+        for item_id, proposal, kind, version in entries:
             if proposal is None:
                 continue              # blocked pre-validation (no builder)
             res = results[idx]
             idx += 1
             st = self._item_state.get(item_id) if kind == "program" else None
-            version = st["program_version"] if st else None
+            version = st["program_version"] if st else version
             if res["status"] == "clamped":
                 # cadence retry next tick; record the FIRST clamp per item
                 # per generation, count silently after (trail hygiene)
@@ -248,11 +278,12 @@ class Executor:
                 continue
             p = self._production_proposal(item)
             if p is not None:        # None: blocked (no builder)
-                out.append((item["id"], p, "program"))
+                out.append((item["id"], p, "program", self.program.version))
         for item in self.program.tasking:
             if not self._eligible(item, tick):
                 continue
-            out.append((item["id"], self._tasking_proposal(item), "program"))
+            out.append((item["id"], self._tasking_proposal(item), "program",
+                        self.program.version))
         return out
 
     # -- reflex floor (FR-006; contracts §3) ---------------------------------
@@ -270,6 +301,7 @@ class Executor:
         if not collectors:
             return []
         covered = self._covered_ships()
+        covered |= self.micro_covered_ships()
         dockables = [s for s in own if s.get("type") in DOCKABLES]
         resources = list((view.get("resources") or {}).values())
         out = []
@@ -285,7 +317,7 @@ class Executor:
                 if rid is None:
                     continue
                 out.append((sid, {"verb": "order_harvest", "params": {
-                    "ships": [sid], "target": rid}}, "reflex"))
+                    "ships": [sid], "target": rid}}, "reflex", None))
             elif self.reflexes.get("deliver") and _full_for_deliver(s):
                 if not dockables:
                     continue
@@ -294,13 +326,13 @@ class Executor:
                 if did is None:
                     continue
                 out.append((sid, {"verb": "order_dock", "params": {
-                    "ships": [sid], "dockWith": did}}, "reflex"))
+                    "ships": [sid], "dockWith": did}}, "reflex", None))
         # map ship-id item keys to reflex names for citations
         named = []
-        for item_id, proposal, kind in out:
+        for item_id, proposal, kind, _v in out:
             tag = "reflex_harvest" \
                 if proposal["verb"] == "order_harvest" else "reflex_deliver"
-            named.append((tag, proposal, "reflex"))
+            named.append((tag, proposal, "reflex", None))
         return named
 
     def _idle_for_harvest(self, ship):
@@ -314,6 +346,13 @@ class Executor:
         for item in self.program.tasking:
             covered.update(item.get("ships") or [])
         return covered
+
+    def micro_covered_ships(self):
+        """Ships covered by QUEUED micro items (reflex gate input)."""
+        out = set()
+        for it in self._micro_queue:
+            out.update(it.get("ships") or [])
+        return out
 
     def _eligible(self, item, tick):
         st = self._item_state.get(item["id"])

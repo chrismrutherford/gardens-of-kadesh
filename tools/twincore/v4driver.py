@@ -15,17 +15,25 @@ LAST valid program, the failure is recorded (`packet_rejected` +
 control modules (s1tick/economy/s2pulse/directive) are NOT referenced.
 """
 import json
+import os
+import sys
 import threading
 import time
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(
+    os.path.abspath(__file__))))   # tools/ (aiplay_protocol lives there)
+
 from twincore.config import seconds_to_ticks
-from twincore.llm import S2Channel
-from twincore.program import ProgramError, build_pulse_input, validate_packet
+from twincore.llm import S1Channel, S2Channel
+from twincore.program import (ProgramError, build_micro_input,
+                              build_pulse_input, validate_micro_packet,
+                              validate_packet)
 from twincore.client import Client
 from twincore.recorder import Recorder, now_ms
 from twincore.state_store import Ledger
 from twincore.validator import Validator
 from twincore.executor import Executor
+import aiplay_protocol as AIP
 
 
 DEFAULT_PULSE_TICKS = seconds_to_ticks(120.0)
@@ -280,6 +288,217 @@ class PulseLoop:
         return self._call(msgs, tick)
 
 
+MICRO_CHARTER = (
+    "You are S1, the fast tactical model of seat {seat}. You react EVERY "
+    "{cadence}s within the delegation envelope your strategist licensed. "
+    "Reply ONLY with tool calls using the provided order tools (tasking "
+    "verbs). Ship ids come from the LIVE VIEW. If nothing needs reacting "
+    "to, reply with NO tool calls. Production/build tools are NOT yours "
+    "unless explicitly granted."
+)
+
+S1_TASKING_VERBS = ("order_attack", "order_move", "order_guard",
+                    "order_patrol", "order_formation", "order_halt",
+                    "order_tactics", "order_harvest", "order_dock")
+
+
+def _s1_tools():
+    tools = []
+    for verb in S1_TASKING_VERBS:
+        spec = (AIP.REGISTRY.get("order_tools") or {}).get(verb) or {}
+        tools.append({"type": "function", "function": {
+            "name": verb,
+            "description": spec.get("desc", verb),
+            "parameters": {"type": "object", "properties": {},
+                           "additionalProperties": True}}})
+    return tools
+
+
+class S1MicroLoop:
+    """S1 micro-pulse: async two-phase like the S2 loop, shorter cadence.
+    Tool-call output → envelope-validated micro items → executor micro
+    lane (commands cite s1:mN). Violations recorded, never executed
+    (FR-018)."""
+
+    def __init__(self, channel, executor, recorder, ledger,
+                 micro_pulse_ticks=128, s1_in=4096, charter_lines=None,
+                 own_player=0):
+        from twincore.llm import LLMError
+        self.channel = channel
+        self.executor = executor
+        self.recorder = recorder
+        self.ledger = ledger
+        self.micro_pulse_ticks = micro_pulse_ticks
+        self.s1_in = s1_in
+        self.charter_lines = list(charter_lines or [])
+        self.own_player = own_player
+        self.next_pulse_at = self.micro_pulse_ticks
+        self.seq = 0
+        self.last_seq = 0
+        self._wake = False
+        self._worker = None
+        self._result = None
+        self._tools = _s1_tools()
+        self._llm_error_cls = LLMError
+
+    def due(self, tick, paused=False):
+        if paused:
+            return False
+        if self._wake:
+            return True
+        if self._worker is not None and self._worker.is_alive():
+            return False
+        return tick >= self.next_pulse_at
+
+    def wake(self):
+        self._wake = True
+
+    def start_micro(self, tick, paused=False):
+        if paused:
+            return False
+        self.next_pulse_at = tick + self.micro_pulse_ticks
+        if self._worker is not None and self._worker.is_alive():
+            return False
+        msgs, meta = self.micro_input(tick)
+        if self.recorder:
+            self.recorder.record("usage", tick=tick, channel="s1_in",
+                                 total=meta["units"], alerts=meta["alerts"])
+        self._result = None
+        self._worker = threading.Thread(
+            target=self._call, args=(msgs, tick), daemon=True)
+        self._worker.start()
+        return True
+
+    def harvest(self, timeout=None):
+        if self._worker is None:
+            return None
+        if timeout is not None:
+            self._worker.join(timeout)
+        if self._worker.is_alive():
+            return None
+        self._worker = None
+        return self._result
+
+    def micro_input(self, tick):
+        view = self.ledger.as_dict() if self.ledger is not None else {}
+        prog = self.executor.program if self.executor else None
+        if self.charter_lines:
+            charter = list(self.charter_lines)
+        else:
+            cadence = self.micro_pulse_ticks // 16
+            charter = [MICRO_CHARTER.replace("{seat}", str(self.own_player))
+                       .replace("{cadence}", str(max(1, cadence)))]
+        grants = json.dumps(prog.delegate, sort_keys=True) \
+            if prog is not None else "[]"
+        status_lines = ["%s %s cmds=%s" % (s["item_id"], s["resolution"],
+                                           s["command_ids"])
+                        for s in (self.executor.statuses() or [])
+                        if s["item_id"].startswith("s1:")]
+        text, meta = build_micro_input(
+            charter_lines=charter,
+            p0_items=[],
+            envelope_lines=[grants],
+            live_lines=self._live_view(view, prog),
+            prev_micro_lines=[],
+            prev_status_lines=status_lines,
+            budget_units=self.s1_in)
+        msgs = [{"role": "system", "content": text},
+                {"role": "user", "content": "tick %d: react or stay "
+                 "silent." % tick}]
+        return msgs, meta
+
+    def _live_view(self, view, prog):
+        lines = []
+        for sid, s in sorted((view.get("ships_all") or {}).items(),
+                             key=lambda kv: _sid(kv[0])):
+            if s.get("owner") != self.own_player:
+                continue
+            o = s.get("order")
+            verb = o.get("verb") if isinstance(o, dict) else o
+            lines.append("ship %s %s order=%s" % (sid, s.get("type") or "?",
+                                                  verb or "-"))
+        lines.append("resources %d" % len(view.get("resources") or {}))
+        return lines
+
+    # -- the call: tool calls → envelope-validated micro items ---------------
+    def _call(self, msgs, tick):
+        if self.recorder:
+            self.recorder.record("usage", tick=tick, channel="s1_out")
+        try:
+            calls, usage = self.channel.propose(msgs, self._tools)
+            if self.recorder:
+                self.recorder.record("usage", tick=tick, channel="s1_out",
+                                     prompt=usage.get("prompt"),
+                                     completion=usage.get("completion"))
+        except Exception as e:   # LLMError or transport: degrade (FR-012)
+            self._result = {"ok": False, "error": str(e), "seq": None,
+                            "tick": tick}
+            if self.recorder:
+                self.recorder.record("packet_rejected", tick=tick,
+                                     reason="s1 channel: %s" % e)
+            return self._result
+        prog = self.executor.program if self.executor else None
+        items = self._items_from_calls(calls, prog)
+        self.seq += 1
+        try:
+            applied, blocked = validate_micro_packet(
+                {"seq": self.seq, "program_version":
+                 (prog.version if prog is not None else 0),
+                 "tasking": items}, prog, last_seq=self.last_seq, tick=tick)
+            self.last_seq = self.seq
+            self._result = {"ok": True, "applied": applied,
+                            "blocked": blocked, "seq": self.seq,
+                            "tick": tick}
+            if self.recorder:
+                self.recorder.record("micro", tick=tick, event="applied",
+                                     seq=self.seq, n=len(applied),
+                                     program_version=(prog.version if
+                                                      prog else None))
+            return self._result
+        except ProgramError as e:
+            self._result = {"ok": False, "error": e.reason,
+                            "seq": self.seq, "tick": tick}
+            if self.recorder:
+                self.recorder.record("micro", tick=tick, event="rejected",
+                                     seq=self.seq, reason=e.reason,
+                                     program_version=(prog.version if
+                                                      prog else None))
+            return self._result
+
+    def _items_from_calls(self, calls, prog):
+        items = []
+        for i, c in enumerate(calls or []):
+            verb = c.get("verb")
+            if verb not in S1_TASKING_VERBS:
+                continue                  # non-tasking tools never passed
+            params = dict(c.get("params") or {})
+            item = {"id": "m%d" % (i + 1), "verb": verb}
+            gid = self._licensing_grant(verb, prog)
+            if gid:
+                item["grant"] = gid
+            if params.get("ships"):
+                item["ships"] = [int(s) for s in
+                                 (params.get("ships") or [])]
+            for k in ("target", "tactics"):
+                if params.get(k) is not None:
+                    item[k] = params[k]
+            if params.get("dockWith") is not None:
+                item["target"] = params["dockWith"]
+            if params.get("pos") is not None:
+                item["pos"] = list(params["pos"])
+            items.append(item)
+        return items
+
+    @staticmethod
+    def _licensing_grant(verb, prog):
+        if prog is None:
+            return None
+        for g in prog.delegate:
+            if verb in g["verbs"]:
+                return g["grant_id"]
+        return None
+
+
 # --------------------------------------------------------------------------
 # driver assembly
 # --------------------------------------------------------------------------
@@ -292,7 +511,9 @@ class V4Driver:
                  ledger=None, executor=None, validator=None,
                  pulse_ticks=None, s2_in=DEFAULT_S2_IN,
                  s2_out=DEFAULT_S2_OUT, max_repairs=DEFAULT_MAX_REPAIRS,
-                 charter_lines=None, own_player=0):
+                 charter_lines=None, own_player=0, s1_channel=None,
+                 micro_pulse_ticks=128, s1_in=4096,
+                 s1_charter_lines=None):
         self.client = client if client is not None else Client(
             mcp_url="http://127.0.0.1:8302/mcp")
         self.channel = channel
@@ -310,7 +531,17 @@ class V4Driver:
                               max_repairs=max_repairs,
                               charter_lines=charter_lines,
                               own_player=own_player)
+        self.s1_loop = None
+        if s1_channel is not None:
+            self.s1_loop = S1MicroLoop(
+                channel=s1_channel, executor=self.executor,
+                recorder=self.recorder, ledger=self.ledger,
+                micro_pulse_ticks=micro_pulse_ticks, s1_in=s1_in,
+                charter_lines=s1_charter_lines, own_player=own_player)
         self.model_state = "online"
+
+    def s1_state(self):
+        return "online" if self.s1_loop else "off"
 
     # -- binding (FR-002: exactly ONE owner) --------------------------------
     def bind(self):
@@ -329,9 +560,17 @@ class V4Driver:
         done = self.loop.harvest(timeout=0.05)
         if done is not None:
             self._digest_pulse_result(done, tick)
+        if self.s1_loop is not None:
+            micro = self.s1_loop.harvest(timeout=0.05)
+            if micro is not None and micro.get("ok"):
+                self.executor.feed_micro(micro["applied"], None,
+                                         micro["seq"], tick)
         issued = self.executor.on_tick(tick)
         if self.loop.due(tick, paused=False):
             self.loop.start_pulse(tick)
+        if self.s1_loop is not None and self.s1_loop.due(
+                tick, paused=False):
+            self.s1_loop.start_micro(tick)
         return issued
 
     def _digest_pulse_result(self, done, tick):
@@ -485,6 +724,21 @@ def driver_from_config(config, recorder=None, client=None, channel=None):
                    max_repairs=int(v4.get("max_repair_attempts",
                                           DEFAULT_MAX_REPAIRS)),
                    own_player=seat)
+    if bool((_cfgget(config, "v4.s1_channel.enabled", True))):
+        url1 = _cfgget(config, "channels.s1.url") or ""
+        if url1:
+            drv.s1_loop = S1MicroLoop(
+                channel=S1Channel(
+                    url=url1, model=_cfgget(config, "channels.s1.model", ""),
+                    max_output=int(_cfgget(config, "channels.s1.max_output",
+                                           400)),
+                    timeout=float(_cfgget(config, "channels.s1.timeout_seconds",
+                                          60.0)),
+                    thinking=_cfgget(config, "channels.s1.thinking", False)),
+                executor=drv.executor, recorder=recorder, ledger=ledger,
+                micro_pulse_ticks=seconds_to_ticks(
+                    v4.get("micro_pulse_seconds", 8)),
+                s1_in=int(budgets.get("s1_in", 4096)), own_player=seat)
     drv._v4cfg = dict(v4)
     return drv
 
