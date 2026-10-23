@@ -169,8 +169,10 @@ class S2Channel:
         packet = _extract_json_object(text)
         if packet is not None and not isinstance(packet, dict):
             packet = None
+        # raw completion passed through for observability (debug IO tap;
+        # not a trail row — v4 driver dumps it when V4_DEBUG_IO is set)
         if packet is None:
-            return ({"packet": None,
+            return ({"packet": None, "raw": text,
                      "error": "unparseable JSON from strategist: %r"
                               % ((text or "")[:200])}, usage)
-        return {"packet": packet}, usage
+        return {"packet": packet, "raw": text}, usage

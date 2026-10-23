@@ -188,12 +188,36 @@ class PulseLoop:
     def _p0_items(self):
         return list(getattr(self, "p0_items", []) or [])
 
+    def _debug_io(self, tick, attempt, msgs, out):
+        """Observability tap: when V4_DEBUG_IO is a directory, dump the
+        pulse input messages + raw completion + parsed packet there.
+        Observability ONLY — never gameplay-affecting (Constitution IV)."""
+        import os
+        d = os.environ.get("V4_DEBUG_IO")
+        if not d:
+            return
+        try:
+            os.makedirs(d, exist_ok=True)
+            n = getattr(self, "_io_seq", 0) + 1
+            self._io_seq = n
+            base = os.path.join(d, "pulse-%s-%02d-a%d" % (tick, n, attempt))
+            with open(base + ".input.json", "w") as fh:
+                json.dump(msgs, fh, indent=1, default=str)
+            with open(base + ".raw.txt", "w") as fh:
+                fh.write(str(out.get("raw") or ""))
+            with open(base + ".packet.json", "w") as fh:
+                json.dump(out.get("packet") or {"error": out.get("error")},
+                          fh, indent=1, default=str)
+        except Exception:
+            pass   # observability must never break the driver
+
     # -- the channel call (worker body; ≤1 bounded repair) ----------------
     def _call(self, msgs, tick):
         attempts = 1 + max(0, int(self.max_repairs))
         reason = None
         for attempt in range(1, attempts + 1):
             out, usage = self.channel.propose(msgs)
+            self._debug_io(tick, attempt, msgs, out)
             if self.recorder:
                 self.recorder.record("usage", tick=tick, channel="s2_out",
                                      prompt=usage.get("prompt"),
