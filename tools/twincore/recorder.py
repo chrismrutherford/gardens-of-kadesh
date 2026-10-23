@@ -42,7 +42,14 @@ def _kind_file(name):  # legacy name kept for the record-shape contract notes
 
 
 class Recorder:
-    """Append-only match trail writer (the queue table is the store)."""
+    """Append-only match trail writer (the queue table is the store).
+
+    Thread-safe: drivers call record() from the pulse workers AND the
+    main tick loop; the psycopg2 connection is serialised by one lock
+    (a wedged socket degrades per call, never blocks >statement_timeout).
+    """
+
+    _IO_LOCK = threading.Lock()
 
     def __init__(self, match_id, dsn=None, ring_cap=RING_CAP,
                  match_dir_removed=None):
@@ -54,6 +61,7 @@ class Recorder:
         self._conn = None
         self._ring = []
         self._seq = itertools.count()
+        self._lock = threading.RLock()
 
     # -- connection (resilient) ------------------------------------------------
     def _connect(self):
@@ -75,11 +83,12 @@ class Recorder:
         return self._conn
 
     def close(self):
-        try:
-            if self._conn is not None and self._conn.closed == 0:
-                self._conn.close()
-        except Exception:
-            pass
+        with self._lock:
+            try:
+                if self._conn is not None and self._conn.closed == 0:
+                    self._conn.close()
+            except Exception:
+                pass
         self._conn = None
 
     # -- writes -----------------------------------------------------------------
@@ -95,12 +104,11 @@ class Recorder:
             "wall_ts": time.time(),
         }
         line.update(payload)
-        # general in-memory fall-back (cap'd): primary record store is
-        # postgres; the ring guarantees degraded-mode replay of the tail
-        self._ring.append(line)
-        if len(self._ring) > self.ring_cap:
-            del self._ring[:len(self._ring) - self.ring_cap]
-        self._insert(kind, line)
+        with self._lock:
+            self._ring.append(line)
+            if len(self._ring) > self.ring_cap:
+                del self._ring[:len(self._ring) - self.ring_cap]
+            self._insert(kind, line)
         return line
 
     def _insert(self, kind, line):

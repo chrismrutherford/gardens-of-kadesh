@@ -782,8 +782,11 @@ def driver_from_config(config, recorder=None, client=None, channel=None):
 def main(argv=None):
     """CLI: python -m tools.twincore.v4driver --config <config.json>"""
     import argparse
+    import faulthandler
     import os
     import sys
+    faulthandler.enable()
+    faulthandler.dump_traceback_later(120, repeat=True)  # wedge evidence
     ap = argparse.ArgumentParser(description="v4 strategist-driven driver")
     ap.add_argument("--config", required=True)
     ap.add_argument("--poll", type=float, default=1.0,
