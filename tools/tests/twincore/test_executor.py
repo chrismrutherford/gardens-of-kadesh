@@ -461,7 +461,9 @@ class TestDraftV3Executor(unittest.TestCase):
         self.assertTrue(any("E_BAD_REQUEST" in v["text"]
                             for v in ex.verdicts()))
 
-    def test_order_applied_clears_inflight(self):
+    def test_order_applied_flags_acked_keeps_inflight(self):
+        # Draft v3 refinement: orderAccepted does NOT clear PRODUCTION
+        # oids (standing re-mint guard) — supersede does.
         led = CF.FakeLedger(CF.v4_ledger(builders=1))
         ex = self._ex(ledger=led)
         ex.set_program(self.make_prog(
@@ -472,6 +474,12 @@ class TestDraftV3Executor(unittest.TestCase):
         self.assertIn(oid, ex.ledger.in_flight())
         self.assertTrue(ex.on_engine_event(
             {"type": "orderApplied", "id": oid}, tick=2))
+        self.assertIn(oid, ex.ledger.in_flight())
+        self.assertTrue(ex.item_status("p1")["engine_acked"])
+        ex.set_program(P.validate_packet(CF.v4_packet(
+            8, production=[{"id": "p1", "verb": "order_build",
+                            "params": {"type": "LightInterceptor"}}]),
+            7), tick=3)
         self.assertNotIn(oid, ex.ledger.in_flight())
 
     # -- clamp verdicts ------------------------------------------------------
@@ -491,3 +499,48 @@ class TestDraftV3Executor(unittest.TestCase):
         self.assertIn("cap", st["verdict"])
         self.assertTrue(any(v["kind"] == "clamp" and v["subject"] == "t2"
                             for v in ex.verdicts()))
+
+
+class TestStandingProductionDedup(ExecutorBase):
+    """Live lesson: standing order_build items re-minted every ~150 ticks
+    (event consumer cleared the oid on orderApplied) → duplicates queued.
+    Production oids stay in-flight FOR THE GENERATION; orderApplied only
+    flags engine_acked; supersede retires them."""
+
+    def setUp(self):
+        import twincore.executor as E
+        self.E = E
+
+    def test_production_oid_stays_inflight_on_ack(self):
+        led = CF.FakeLedger(CF.v4_ledger(builders=1))
+        ex = make_executor(self.E.Executor, ledger=led,
+                           client=CF.FakeClient())
+        ex.set_program(self.make_prog(
+            production=[{"id": "p1", "verb": "order_build",
+                         "params": {"type": "ResourceCollector"}}],
+            tasking=[]), tick=1)
+        issued = ex.on_tick(1)
+        oid = issued[0]["command_id"]
+        ex.on_engine_event({"type": "orderApplied", "id": oid}, tick=2)
+        self.assertIn(oid, ex.ledger.in_flight())
+        self.assertEqual(ex.item_status("p1")["resolution"], "applied")
+        # same tick batch again: dedupe CLAMPS the re-propose
+        ex.on_tick(3)
+        self.assertEqual(ex.item_status("p1")["clamped_count"], 1)
+
+    def test_supersede_retires_production_oid(self):
+        led = CF.FakeLedger(CF.v4_ledger(builders=1))
+        ex = make_executor(self.E.Executor, ledger=led,
+                           client=CF.FakeClient())
+        ex.set_program(self.make_prog(
+            production=[{"id": "p1", "verb": "order_build",
+                         "params": {"type": "ResourceCollector"}}],
+            tasking=[]), tick=1)
+        issued = ex.on_tick(1)
+        oid = issued[0]["command_id"]
+        ex.on_engine_event({"type": "orderApplied", "id": oid}, tick=2)
+        ex.set_program(P.validate_packet(CF.v4_packet(
+            8, production=[{"id": "p1", "verb": "order_build",
+                            "params": {"type": "LightInterceptor"}}],
+            tasking=[]), 7), tick=10)
+        self.assertNotIn(oid, ex.ledger.in_flight())

@@ -40,6 +40,7 @@ def _ex_io_append(path, text):
         pass
 
 
+PRODUCTION_VERBS = ("order_build", "order_research")
 BUILDERS = ("Mothership", "Carrier")
 DOCKABLES = ("Mothership", "Carrier", "ResearchShip")
 COLLECTOR = "ResourceCollector"
@@ -312,6 +313,14 @@ class Executor:
         """Swap in a WHOLE new program generation (FR-008; old in-flight
         commands keep running; suppression state resets)."""
         self._flush_clamp_summary(tick)
+        # SUPERSEDE: the prior generation's production oids (kept in-flight
+        # to stop standing re-mints, see on_engine_event) are retired — a
+        # new program owns production now.
+        for oid, item_id in list(self._oid_items.items()):
+            st = self._item_state.get(item_id)
+            if st is not None and st["program_version"] != program.version:
+                self.ledger.mark_command_done(oid)
+                self._oid_items.pop(oid, None)
         self.program = program
         self._item_state = {}
         self._suppressed = set()
@@ -506,6 +515,16 @@ class Executor:
             self.ledger.mark_command_done(oid)   # stop dedupe-blocking
             return True
         if etype == "orderApplied":
+            item_id = self._oid_items.get(oid)
+            st = self._item_state.get(item_id) if item_id is not None else None
+            if st is not None and st["verb"] in PRODUCTION_VERBS:
+                # ACCEPTED ≠ retired: a standing PRODUCTION item keeps its
+                # oid in-flight for the program generation so the dedupe
+                # gate stops re-minting it every tick (live lesson: order_
+                # build re-issued ~every 150 ticks, duplicating the engine
+                # build queue). Superseding the program retires it.
+                st["engine_acked"] = True
+                return True
             self.ledger.mark_command_done(oid)   # accepted, no longer pending
             return True
         return False

@@ -285,5 +285,6 @@ class TestZoneGrantMicro(unittest.TestCase):
         prog = P.validate_packet(copy.deepcopy(pkg), 0)
         # the live crash site: micro_input with a zoned grant
         loop = mk_s1_loop(prog, script=[[]])[0]
-        text, _ = loop.micro_input(5)
-        self.assertIn("out-of-scope", text)   # zone branch executed cleanly
+        msgs, _meta = loop.micro_input(5)
+        content = msgs[0]["content"]
+        self.assertIn("[out-of-scope]", content)   # zone branch clean

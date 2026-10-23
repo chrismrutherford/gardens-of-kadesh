@@ -385,4 +385,7 @@ class TestDraftV3Driver(unittest.TestCase):
         oid = issued[0]["command_id"]
         drv.consume_events([{"type": "orderApplied", "tick": 2,
                              "id": oid}], tick=2)
-        self.assertNotIn(oid, led.in_flight())
+        # production oids stay in-flight for the generation (re-mint guard)
+        self.assertIn(oid, led.in_flight())
+        self.assertTrue(drv.executor.item_status(
+            issued[0]["item_id"])["engine_acked"])
