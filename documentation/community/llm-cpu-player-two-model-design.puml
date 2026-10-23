@@ -1,0 +1,84 @@
+@startuml llm-cpu-player-two-model-design
+title twin-core LLM CPU player - S1 reflexes + S2 intent over a deterministic orchestrator\n(spec 002 proposal; behaviour contracts from spec 001 carry over)
+
+skinparam componentStyle rectangle
+skinparam ArrowColor #444444
+skinparam ArrowFontSize 10
+skinparam nodesep 45
+skinparam ranksep 65
+skinparam rectangleBackgroundColor #FFFFFF
+skinparam noteBackgroundColor #FFFFE0
+skinparam packageBackgroundColor #FFFFFF
+
+package "Game Engine (GoK)" as ENG {
+  component "AI-Play layer (src/AIPlay)\ncommand stream + event stream" as AIP
+}
+
+component "MCP bridge" as MCP
+
+package "twin-core driver (peer client process)" as DRV {
+
+  package "ORCHESTRATOR - deterministic code, no model" as ORCH {
+    component "clocks\nS1 tick 1-2s (combat-gated)\nS2 pulse 30-90s" as CLK
+    component "digest engine\ndelta vs last seen | P0/P1/P2 importance |\ninterval rollups replace old raw deltas" as DIG
+    component "state store (canonical world model)\nfleet inventory | RU bank + projection |\nenemy knowledge per class seen | blob ratings |\nalliances | pending orders" as ST
+    component "context applier\nvalidate directive patch | version bump |\ntrim/reset S1 history | digest.config" as CTX
+    component "command validator\ncommand families + alliance rules |\nbounds + dedupe |\nrejections -> tool errors to S1" as VAL
+  }
+
+  package "S1 tactical core - small fast model (8-14B class)\nreflexes | stateless between resets" as S1P {
+    component "per-tick turn\n[role card][directive vN]\n[rollups + last-K deltas]\n[ledger echo][in-flight]\n-> 3-6 tool calls" as S1
+  }
+
+  package "S2 strategist - large model\nprotocol only: intent, never touches the game" as S2P {
+    component "pulse turn\n[charter][world ledger]\n[pinned goals + age][last M digests]\n-> 1 control packet (<=2k tok)" as S2
+  }
+}
+
+database "recorder (append-only, replay + eval surface)\nevents | digests | packets | decisions | token/cost" as REC
+
+cloud "LLM serving\nstatic-first prompt order for KV cache" as LLM
+
+' ---- fast lane: steady-state S1 loop, every tick ----
+AIP -[#38761d]-> DIG : raw events\n(delta vs last seen)
+DIG -[#38761d]-> ST : compiles ledger\n+ ratings
+DIG -[#38761d]-> S1 : rollups +\nlast-K deltas
+ST -[#38761d]-> S1 : ledger echo
+CLK -[#38761d,dashed]-> S1 : tick gate
+S1 -[#38761d]-> VAL : tool calls\n(50-200 tok)
+VAL -[#38761d]-> S1 : rejected /\nclamped
+VAL -[#38761d]-> MCP : accepted only
+MCP -[#38761d]-> AIP : commands
+DIG -[#cc0000]-> S1 : P0 -> top\nof window
+
+' ---- slow lane: S2 pulse, every 30-90s ----
+DIG -[#1155cc]-> S2 : digest per pulse\n(300-800 tok)
+ST -[#1155cc]-> S2 : world ledger +\nprojections
+CLK -[#1155cc,dashed]-> S2 : pulse gate
+DIG -[#cc0000,dashed]-> S2 : P0 ->\nwake now
+S2 -[#1155cc]-> CTX : control packet
+CTX -[#1155cc]-> S1 : directive vN+1\n+ trim/reset
+
+' ---- recorder: everything lands here ----
+DIG -[#777777]-> REC
+S1 -[#777777]-> REC : decisions +\noutcomes
+S2 -[#777777]-> REC : control packets
+
+' ---- serving ----
+S1 --> LLM : <=8k in /\n50-200 out
+S2 --> LLM : <=16-24k in /\n<=2k out
+
+note bottom of ENG
+  peer client: all effects are ordinary
+  game commands (spec-001 FR-006/FR-007);
+  built-in deterministic AI remains a
+  selectable player type in the lobby
+end note
+
+legend right
+  green = fast lane (S1, every 1-2s tick)
+  blue = slow lane (S2, 30-90s pulse)
+  red = P0 interrupt path (wake-now)
+  grey = recorder (append-only, everything lands here)
+endlegend
+@enduml

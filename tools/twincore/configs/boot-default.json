@@ -1,0 +1,6 @@
+{
+  "seat": {"player_index": 0},
+  "transport": {"mcp_url": "http://127.0.0.1:8302/mcp"},
+  "difficulty": "intermediate",
+  "strategist": {"enabled": false}
+}
