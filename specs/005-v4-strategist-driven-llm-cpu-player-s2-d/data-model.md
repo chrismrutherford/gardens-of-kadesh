@@ -13,6 +13,8 @@ Companion to [plan.md](plan.md) and [contracts/program-schema.md](contracts/prog
 | `issued_tick` | int | game tick the pulse input was built at |
 | `issued_pulse` | int | pulse counter, monotonic |
 | `posture` | string? | advisory text; NOT executable — rendered into NEXT pulse input only (FR-005) |
+| `arc` | string? | S2's running compacted story, rewritten each pulse; driver stores LATEST only and re-renders it into every pulse input; ≤600 chars default (config `v4.arc_chars`) — over-budget arc is LENGTH-CLAMPED with a verdict, never rejected (FR-021) |
+| `s1_context` | object? | `{max_exchanges: int 0–8, ticks: int}` — S2-allocated S1 history window; the executor truncates S1's rolling micro-history mechanically; FIRST thing pruned under budget breach; absent ⇒ S1 stays stateless (FR-022) |
 | `delegate[]` | list[Grant] | the DELEGATION ENVELOPE (FR-017): what S1 may do between pulses; validated with the packet |
 | `production[]` | list[ProductionItem] | build/research intents, fixed priority order |
 | `tasking[]` | list[TaskingItem] | fleet verbs, fixed priority order |
@@ -53,7 +55,30 @@ Previous version remains authoritative until a valid new one lands (FR-008).
 | `item_id` | string | which item caused the command(s) |
 | `issued_tick` | int | tick the commands were minted |
 | `command_ids[]` | list[int] | commands minted this attempt |
-| `resolution` | enum | `applied` \| `rejected` (engine orderRejected aux=<code>) \| `blocked` (validator reason string) \| `pending` \| `unrecoverable` (stale subjects + re-issue hint) |
+| `resolution` | enum | `applied` (executor issued = NOT engine-acked) \| `engine_denied` (orderRejected `aux=<code>` from the event consumer) \| `blocked` (validator reason, verdict text attached) \| `pending` \| `unrecoverable` (stale subjects + re-issue hint) |
+| `verdict` | string? | the FR-020 actionable line for non-`applied` outcomes (what was refused + what IS allowed) |
+
+ISSUED ≠ ACCEPTED (FR-023): the engine-event consumer folds asynchronous
+`orderRejected`/`shipDestroyed`/research events into the matching item's
+status; an item the executor issued but the engine denied is
+`engine_denied: aux` in the NEXT pulse input with a verdict naming the
+legal alternatives (e.g. `unknown tech 'MassDrive2Kt'; researchable now:
+[Chassis1, TargetingSystems, …]`).
+
+### Verdict (executor/engine decision made legible — FR-020)
+
+| Field | Type | Rules |
+|---|---|---|
+| `kind` | enum | `deny` \| `coerce` \| `clamp` \| `engine_denied` |
+| `subject` | string | item/reflex id the verdict concerns (`p2`, `t3`, `reflex_harvest`, `s1:m7`) |
+| `text` | string | ONE actionable line: what was refused + what IS currently allowed (licensed verbs/ships of the active grant; legal techs/hulls with costs; the clamped cap). Bounded (hundreds of bytes, config `v4.verdict_chars`) |
+| `tick` | int | verdict time |
+
+Sinks (all three, every verdict): (a) `validation` trail row; (b) S2's
+per-item ProgramStatus in the next pulse input; (c) S1's rolling verdict
+section (last K verdicts, budget-bounded) in the next micro-input. The
+verdict emitter NEVER invents orders — it explains only the executor's
+own decisions.
 
 Reflex-produced commands are recorded with the same row shape, `item_id`
 naming the reflex (`reflex_harvest` / `reflex_deliver`) or the S1 lane
@@ -62,14 +87,17 @@ for all command paths (Recorder rows, spec Key Entities).
 
 ### Reflex (enumerated set — FR-006, EXACTLY)
 
-| Reflex | Trigger (from state alone) | Action |
+| Reflex | Trigger (from state alone, re-checked EVERY tick) | Action |
 |---|---|---|
-| `reflex_harvest` | owned ResourceCollector idle (no live order / parade) | harvest nearest asteroid (euclidean, deterministic tie-break by id) |
+| `reflex_harvest` | owned ResourceCollector idle — no live order OR parade/no-harvest-order state | harvest nearest-value asteroid (euclidean, deterministic tie-break by id) |
 | `reflex_deliver` | owned ResourceCollector full | dock Mothership/Carrier to deliver |
 
-Precondition for both: no live program item AND no live S1 envelope
-command covers those ships (program > S1 > reflex; reflexes are the
-bottom of the priority law).
+CONTINUOUS ENFORCEMENT (live-round lesson: an RC sat in parade ~20k
+ticks): the reflex pass re-evaluates every owned collector EVERY tick and
+re-dispatches again if a ship drifted back to idle/parade — the reflex is
+a floor condition, not a one-shot event. Precondition for both: no live
+program item AND no live S1 envelope command covers those ships
+(program > S1 > reflex; reflexes are the bottom of the priority law).
 
 ### DelegationEnvelope (Program.`delegate[]` — FR-017)
 
@@ -94,36 +122,61 @@ acts under + own `seq` counter. Validated against the CURRENT envelope
 (version + expiry): verbs/subjects outside grants → those items blocked
 with reasons recorded (never executed), valid remainder applies.
 **MicroStatus** rows mirror ProgramStatus (issued tick, command ids,
-resolution incl. `blocked: outside-envelope`).
+resolution incl. `blocked: outside-envelope` + verdict text naming the
+licensed verbs/ships instead). S1's ROLLING HISTORY = previous
+micro-packets + their outcomes, kept to the `s1_context` window the
+current program allocated (`max_exchanges` items / `ticks` span),
+truncated mechanically; first pruned under the micro budget breach
+(FR-022).
 
-### PulseInput (budgeted observation — FR-009 layout)
+### PulseInput (budgeted observation — FR-009 SUPERSET layout)
+
+Render order (Draft v3):
 
 1. static charter prefix (seat, race, playbook-material block)
-2. P0 events verbatim, pinned (`digest.P0Tracker` items until superseded)
-3. ledger echo — one line per unit group
-4. event rollups (`digest.rollup`, 160-tick interval)
-5. previous program + per-item ProgramStatus
-6. S1 micro digest (adherence, violations) + reflex digest
+2. `# ARC (your summary so far)` — latest stored arc + last posture;
+   NEVER absent (code-seeded from rollups if missing/stale; length-
+   clamped if oversize)
+3. P0 events verbatim, pinned (`digest.P0Tracker` items until superseded)
+4. mechanical rollups since last pulse (builds materialized, kills,
+   researches, spend — code-computed from the trail)
+5. previous program + per-item ProgramStatus INCLUDING `engine_denied`
+   aux codes + verdict text (FR-020/FR-023)
+6. ledger echo — per-ship line (ids/posture/cargo)
+7. ENEMY CONTACTS — `enemy <id> <hull> pos[..] dist_to_base=<m>` (the
+   same builder S1's live view uses; empty contacts = "none observed",
+   no fabrication)
+8. asteroid ledger — `ast <id> pos[..] value=<RU>`, nearest-first, top-N
+   (config `v4.asteroid_top_n`, default 32) + total count/RU in view
+9. build menu — unlocked hulls (from techTree locked-minus-missing) with
+   costs + current buildQueue contents per builder
+10. research menu — researchable techs with missing prerequisites +
+    `labs=<n> lab_busy=<state>`; researched list
 
-Budget ≤12k units (config `v4.budgets.s2_in`); breach → prune oldest
-program history from the input + recorded alert (FR-013). Static
-prefix first for cache-friendly serving.
+Budget ≤12k units (config `v4.budgets.s2_in`); breach → prune by the
+FR-013 order (history/echo first, arc length-clamped, world sections
+LAST) + recorded alert. Static prefix first for cache-friendly serving.
 
 ### MicroInput (S1's budgeted observation — FR-018 layout, ≤4k units)
 
 1. static micro-charter prefix (seat, playbook excerpt, current envelope
    grants echoed verbatim)
 2. P0 events verbatim, pinned
-3. compact live view of envelope-relevant ships (subjects, their orders,
-   threats in/entering zone)
-4. own previous MicroPacket + MicroStatus
-5. program tasking items naming the envelope's ships (so S1 knows what
+3. rolling verdict section — recent executor denials/coercions with the
+   allowed alternatives (FR-020; the live rulebook S1 learns from)
+4. S1 history window — the `s1_context`-sized rolling micro-history
+   (previous packets + outcomes; stateless when absent)
+5. compact live view of envelope-relevant ships (subjects, their orders,
+   in-scope markers, threats in/entering zone)
+6. own previous MicroPacket + MicroStatus
+7. program tasking items naming the envelope's ships (so S1 knows what
    it may override; only when `override_tasking` grants it)
 
 ### Trail rows (postgres `twincore_q.messages`, FR-011)
 
-Reused kinds: `packet`, `revision`, `event_raw`, log kinds as in v3.
-New kinds: `program` — program apply/fail/supersede events;
+Reused kinds: `packet`, `revision`, `event_raw`, `validation` (now ALSO
+carries FR-020 verdict lines), log kinds as in v3.
+Kinds: `program` — program apply/fail/supersede events;
 `micro` — S1 packet apply/violation events (cites program version +
 grant + decision id). All rows: `match_id`, `tick`, `kind`, payload;
 replayable kind/tick (SC-007).
@@ -133,6 +186,11 @@ replayable kind/tick (SC-007).
 - Whole-packet validation before apply; invalid → nothing applies, the
   reason loops to S2's next input, old version stands (FR-008, US3-AS3).
   Same law per micro-packet against the CURRENT envelope (FR-018).
+- `arc`: optional string; over budget → LENGTH-CLAMPED by the driver
+  with a verdict (never rejected, never dropped); missing/stale →
+  code-seeded from rollups (FR-021). `s1_context`: `{max_exchanges:
+  0–8, ticks: 60–100000}` or absent; malformed SHAPE rejects the packet
+  (schema, FR-008) — the ranges are policy, the shape is contract.
 - Priority law on shared ships: program > S1 envelope command > reflex;
   S1 override of program-tasked ships only where `override_tasking`
   grants it, and every override is recorded (FR-017).
@@ -143,6 +201,11 @@ replayable kind/tick (SC-007).
   output, then abort the pulse keeping the last program (Edge Cases).
 - ≤6 validated commands per executor tick (FR-005, all channels
   combined).
+- Reflex floor re-checked EVERY tick (idle includes parade/no-harvest
+  state; re-dispatch ≤1 tick from idle/parade to harvest order) (FR-006).
+- Verdicts: every deny/coerce/clamp/engine-denied emits a `validation`
+  row + renders into both channels' next inputs; text names ≥1 allowed
+  alternative (verdict legibility, SC-006) (FR-020).
 - Allied players as targets rejected at validation (Edge Cases).
 - Retired v1/v2 agent stacks, and v3's s1tick/economy/s2pulse modules
   unreachable from the v4 driver — the v4 S1 channel is NEW code

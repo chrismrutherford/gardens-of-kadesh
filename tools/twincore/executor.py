@@ -27,6 +27,7 @@ import json
 import os
 
 import twincore.validator as V
+from twincore.validator import _fingerprint
 
 
 def _ex_io_append(path, text):
@@ -97,9 +98,23 @@ def _sid_t(thing, key_pos, pk):
 class Executor:
     """The ONLY issuer of v4 commands (its client is the binding owner)."""
 
+    # engine orderRejected aux codes (spec-003) → FR-020 verdict legible
+    AUX_WORDS = {
+        2: "E_BAD_ID: a ship/resource/target id in the order is not in "
+           "the LEDGER/ENEMY/ASTEROID sections (ids are match-scoped; "
+           "re-observe)",
+        3: "E_UNAFFORDABLE: not enough RU (bank is in the LEDGER)",
+        5: "E_NO_LABS: research lab busy — one tech at a time "
+           "(lab_busy in the RESEARCH MENU is the live state)",
+        8: "E_BAD_REQUEST: the order itself is invalid — tech/hull names "
+           "must come from the RESEARCH/BUILD MENU; ships/targets from "
+           "the LEDGER/ASTEROID sections",
+    }
+
     def __init__(self, client, ledger, recorder=None, validator=None,
                  own_player=0, max_per_tick=None, order_seq_start=1000,
-                 reflexes=None, zone=None, zone_radius=15000):
+                 reflexes=None, zone=None, zone_radius=15000,
+                 verdict_budget=200, verdict_feed_k=6):
         self.client = client
         self.ledger = ledger
         self.recorder = recorder
@@ -119,6 +134,51 @@ class Executor:
         self._micro_queue = []   # envelope-validated S1 items awaiting a tick
         self.zone = zone
         self.zone_radius = zone_radius
+        # FR-020 verdict ring — every deny/coerce/clamp/engine-denied the
+        # executor explains, de-duplicated per subject with a # repeat
+        # counter (reset per program generation in set_program).
+        self._verdicts = []
+        self.verdict_budget = int(verdict_budget)
+        self.verdict_feed_k = int(verdict_feed_k)
+        # oid → item citation map (engine-event consumer, FR-023)
+        self._oid_items = {}
+        # semantic-name legality (from the live techTree, FR-009 menus)
+        self._legal_caches = None   # (legal_techs, legal_hulls) by view id
+
+    # -- teaching firewall (FR-020) ---------------------------------------
+    def add_verdict(self, kind, subject, text, tick=None):
+        """Record ONE actionable verdict (what was refused + what IS
+        allowed). Bounded text; repeated identical denials gain a
+        `# repeat <n>` marker so the models see the loop. Sinks: trail
+        `validation` row + both channels' renderers pull verdicts()."""
+        text = str(text)[:self.verdict_budget]
+        for v in self._verdicts:
+            if v["subject"] == subject and v["kind"] == kind \
+                    and v["text"].split(" # repeat")[0] == text:
+                v["n"] += 1
+                v["text"] = "%s # repeat %d" % (text, v["n"])
+                v["tick"] = tick
+                if self.recorder:
+                    self.recorder.record(
+                        "validation", tick=tick, tool="verdict",
+                        status="verdict", verdict_kind=kind, subject=subject,
+                        verdict_text=v["text"], repeat=v["n"])
+                return v
+        v = {"kind": kind, "subject": subject, "text": text, "tick": tick,
+             "n": 1}
+        self._verdicts.append(v)
+        self._verdicts = self._verdicts[-24:]
+        if self.recorder:
+            self.recorder.record("validation", tick=tick, tool="verdict",
+                                 status="verdict", verdict_kind=kind,
+                                 subject=subject, verdict_text=text,
+                                 repeat=1)
+        return v
+
+    def verdicts(self, limit=None):
+        """Latest verdicts for input rendering (last K, oldest first)."""
+        k = self.verdict_feed_k if limit is None else int(limit)
+        return [dict(v) for v in self._verdicts[-k:]]
 
     # -- S1 micro lane (FR-018; contracts/s1-envelope.md §2–3) ---------------
     def feed_micro(self, applied, version, seq, tick):
@@ -181,6 +241,72 @@ class Executor:
         p = (base or {}).get("pos") or [0, 0, 0]
         return [p[0], p[1], p[2], self.zone_radius]
 
+    # -- semantic-name legality (FR-009 menus → FR-020 denies) -----------
+    def _legal_names(self):
+        """Legal tech/hull names from the LIVE techTree. Enforcement is
+        armed only when the tree is real (a `locked` list exists or a
+        researched set exists) — a tree-less view enforces nothing."""
+        view = self.ledger.as_dict() if self.ledger is not None else {}
+        tt = view.get("techTree") or {}
+        researched = set(tt.get("researched") or [])
+        locked = tt.get("locked")
+        if not locked and not researched:
+            return None                     # no tree data: skip enforcement
+        needers = {}
+        legal_hulls = set()
+        for ent in locked or []:
+            hull = ent.get("type")
+            needs = set(ent.get("missing") or [])
+            for tech in needs:
+                needers.setdefault(tech, set()).add(hull)
+            if not needs and not ent.get("disabled"):
+                legal_hulls.add(hull)
+        legal_techs = set(needers)
+        for s in (view.get("ships_all") or {}).values():
+            if s.get("type"):
+                legal_hulls.add(s["type"])
+        return legal_techs, legal_hulls, needers
+
+    def _semantic_deny(self, item, tick):
+        """Pre-wire semantic validation of production names (FR-020):
+        unknown/locked/already-researched tech or hull → the ITEM is
+        blocked with a verdict naming the legal alternatives; never the
+        whole packet, never the engine, never doctrine."""
+        legal = self._legal_names()
+        if legal is None:
+            return None
+        legal_techs, legal_hulls, _needers = legal
+        params = item.get("params") or {}
+        view = self.ledger.as_dict() if self.ledger is not None else {}
+        tt = view.get("techTree") or {}
+        researched = set(tt.get("researched") or [])
+        if item["verb"] == "order_research":
+            tech = params.get("tech") or ""
+            if tech and tech in researched:
+                alts = sorted(legal_techs - {tech})[:6]
+                return ("order_research %r already researched; "
+                        "researchable now: %s" % (tech, alts))
+            if tech and legal_techs and tech not in legal_techs:
+                alts = sorted(legal_techs)[:6]
+                return ("order_research tech %r unknown; researchable "
+                        "now: %s%s" % (tech, alts,
+                                       " ..." if len(legal_techs) > 6
+                                       else ""))
+        elif item["verb"] == "order_build":
+            hull = params.get("type") or ""
+            if hull and legal_hulls and hull not in legal_hulls:
+                needs_str = "; ".join(
+                    "%s needs %s" % (ent.get("type"), ent.get("missing"))
+                    for ent in tt.get("locked") or []
+                    if ent.get("type") == hull and ent.get("missing"))
+                if needs_str:
+                    return ("order_build %r LOCKED — %s; buildable now: "
+                            "%s" % (hull, needs_str,
+                                    sorted(legal_hulls)[:6]))
+                return ("order_build type %r unknown; buildable now: %s"
+                        % (hull, sorted(legal_hulls)[:6]))
+        return None
+
     # -- program generation ---------------------------------------------
     def set_program(self, program, tick):
         """Swap in a WHOLE new program generation (FR-008; old in-flight
@@ -192,6 +318,7 @@ class Executor:
         self._clamp_counts = {}
         for it in program.production + program.tasking:
             self._item_state[it["id"]] = self._new_status(program, it, tick)
+        self._verdicts = []          # new generation: denial history resets
 
     def _flush_clamp_summary(self, tick):
         """Trail hygiene: one aggregate row per generation instead of a
@@ -206,6 +333,7 @@ class Executor:
                 "verb": item["verb"], "once": bool(item.get("once")),
                 "issued_tick": None, "command_ids": [],
                 "resolution": "pending", "reason": None, "aux": None,
+                "verdict": None,
                 "clamped_count": 0, "attempts": 0}
 
     def item_status(self, item_id):
@@ -249,6 +377,14 @@ class Executor:
                 self._clamp_counts[item_id] = n
                 if st is not None:
                     st["clamped_count"] = n
+                if n == 1:
+                    vtxt = ("per-tick cap %d reached — commands across "
+                            "program+S1+reflex share one budget; item "
+                            "waits and re-issues next tick"
+                            % (self.validator.cap,))
+                    if st is not None:
+                        st["verdict"] = vtxt
+                    self.add_verdict("clamp", item_id, vtxt, tick)
                 if n == 1 and self.recorder:
                     self.recorder.record(
                         "validation", tick=tick, tool=proposal["verb"],
@@ -258,11 +394,16 @@ class Executor:
                         program_version=version, item_id=item_id)
                 continue
             if res["status"] == "rejected":
+                vtxt = "%s; allowed: ships/targets from the LEDGER / " \
+                       "ENEMY CONTACTS / ASTEROID LEDGER, names from the " \
+                       "BUILD/RESEARCH MENU" % res.get("reason")
                 if st is not None:
                     st["resolution"] = "blocked"
                     st["reason"] = res.get("reason")
+                    st["verdict"] = vtxt
                     st["attempts"] += 1
                     self._suppressed.add(item_id)  # 1 attempt per cycle
+                self.add_verdict("deny", item_id, vtxt, tick)
                 if self.recorder:
                     self.recorder.record(
                         "validation", tick=tick, tool=proposal["verb"],
@@ -280,12 +421,20 @@ class Executor:
             aux = None
             resolution = "applied"
             if err:
-                resolution = "rejected"
+                resolution = "engine_denied"   # issued ≠ accepted (FR-023)
                 aux = err.get("code")
+                vtxt = "engine denied %s (aux=%s): %s" % (
+                    proposal["verb"], aux,
+                    self.AUX_WORDS.get(aux if isinstance(aux, int)
+                                       else None, err.get("message")
+                                       or "see BUILD/RESEARCH MENUS"))
+                self.add_verdict("engine_denied", item_id, vtxt, tick)
             if st is not None:
                 st["resolution"] = resolution
                 st["aux"] = aux
                 st["reason"] = (err or {}).get("message") if err else None
+                if err:
+                    st["verdict"] = vtxt
                 st["issued_tick"] = tick
                 st["attempts"] += 1
                 st["command_ids"].append(cmd_id)
@@ -294,11 +443,12 @@ class Executor:
                         {"id": cmd_id, "tool": proposal["verb"],
                          "fingerprint": res.get("fingerprint"),
                          "issued_tick": tick})
-            else:
+            elif resolution == "applied":
                 self.ledger.register_command(
                     {"id": cmd_id, "tool": proposal["verb"],
                      "fingerprint": res.get("fingerprint"),
                      "issued_tick": tick})
+            self._oid_items[cmd_id] = item_id   # event consumer (FR-023)
             if self.recorder:
                 self.recorder.record(
                     "validation", tick=tick, tool=proposal["verb"],
@@ -328,6 +478,52 @@ class Executor:
                    "CLAMP tick=%s first-per-item=%s" % (tick, firsts))
         return issued
 
+    # -- engine-event consumer (FR-023: async feedback) ----------------------
+    def on_engine_event(self, ev, tick=None):
+        """Fold one engine event into per-item status + verdicts.
+        orderRejected: item → engine_denied (aux) + legible verdict;
+        orderApplied: the engine ACKED the wire command — in-flight oid
+        cleared (issued ⇒ accepted). Returns True when consumed."""
+        etype = ev.get("type")
+        oid = ev.get("id")
+        if oid is None:
+            return False
+        item_id = self._oid_items.get(oid)
+        if etype == "orderRejected":
+            aux = ev.get("aux")
+            if item_id is None:
+                return False
+            st = self._item_state.get(item_id)
+            word = self.AUX_WORDS.get(aux if isinstance(aux, int) else None)
+            vtxt = "engine denied (aux=%s): %s" % (
+                aux, word or "check names in the BUILD/RESEARCH MENU "
+                "and ids in the LEDGER/ASTEROID sections")
+            if st is not None:
+                st["resolution"] = "engine_denied"
+                st["aux"] = aux
+                st["verdict"] = vtxt
+            self.add_verdict("engine_denied", item_id, vtxt, tick)
+            self.ledger.mark_command_done(oid)   # stop dedupe-blocking
+            return True
+        if etype == "orderApplied":
+            self.ledger.mark_command_done(oid)   # accepted, no longer pending
+            return True
+        return False
+
+    def on_ship_destroyed(self, ev):
+        """shipDestroyed: aux = killer owner + 1 (spec-003). Enemy losses
+        feed the rollup counter (FR-009 rollups)."""
+        try:
+            killer = int(ev.get("aux", 0)) - 1
+            victim_owner = ev.get("owner")
+        except (TypeError, ValueError):
+            return False
+        if killer == self.own_player and victim_owner is not None \
+                and int(victim_owner) != self.own_player:
+            self.kills_counter = getattr(self, "kills_counter", 0) + 1
+            return True
+        return False
+
     # -- mechanical translation (zero policy) ------------------------------
     def _program_entries(self, tick):
         """Program items → validator proposals, fixed order: production
@@ -350,8 +546,11 @@ class Executor:
     # -- reflex floor (FR-006; contracts §3) ---------------------------------
     def _reflex_entries(self, tick):
         """EXACTLY: (a) idle collector → harvest nearest asteroid;
-        (b) full collector → dock nearest dock-capable own ship. Runs ONLY
-        for ships not covered by a live program item (gap-fillers)."""
+        (b) full collector → dock nearest dock-capable own ship. Re-checked
+        EVERY tick (continuous enforcement): a ship that drifted back to
+        idle/parade must not stay blocked by a stale in-flight harvest oid —
+        state truth wins and the stale oid is dropped. Runs ONLY for ships
+        not covered by a live program item (gap-fillers)."""
         if not (self.reflexes.get("harvest") or self.reflexes.get("deliver")):
             return []
         view = self.ledger.as_dict() if self.ledger is not None else {}
@@ -377,8 +576,10 @@ class Executor:
                                resources, "pos")
                 if rid is None:
                     continue
-                out.append((sid, {"verb": "order_harvest", "params": {
-                    "ships": [sid], "target": rid}}, "reflex", None))
+                proposal = {"verb": "order_harvest", "params": {
+                    "ships": [sid], "target": rid}}
+                self._drop_stale_inflight(proposal, tick)
+                out.append((sid, proposal, "reflex", None))
             elif self.reflexes.get("deliver") and _full_for_deliver(s):
                 if not dockables:
                     continue
@@ -399,6 +600,25 @@ class Executor:
     def _idle_for_harvest(self, ship):
         verb = _order_verb(ship)
         return not verb or verb in IDLE_HARVEST_VERBS
+
+    def _drop_stale_inflight(self, proposal, tick):
+        """Continuous-reflex helper (FR-006): when an idle/again-idle
+        collector is blocked only by a STALE identical in-flight harvest
+        oid (the ship drifted back to idle — the command's effect lapsed),
+        drop that oid so the floor can re-dispatch every tick."""
+        if self.ledger is None:
+            return
+        fp = _fingerprint(proposal["verb"], proposal["params"])
+        inflight = self.ledger.in_flight()
+        dropped = [oid for oid, rec in inflight.items()
+                   if rec.get("fingerprint") == fp]
+        for oid in dropped:
+            self.ledger.mark_command_done(oid)
+        if dropped and self.recorder:
+            self.recorder.record("validation", tick=tick, tool="*",
+                                 status="stale_inflight_dropped",
+                                 oids=dropped,
+                                 note="reflex re-issue: ship idle again")
 
     def _covered_ships(self):
         if self.program is None:
@@ -429,6 +649,21 @@ class Executor:
         return True
 
     def _production_proposal(self, item):
+        deny = self._semantic_deny(item, None)
+        if deny is not None:
+            st = self._item_state[item["id"]]
+            st["resolution"] = "blocked"
+            st["reason"] = deny
+            st["verdict"] = deny
+            st["attempts"] += 1
+            self._suppressed.add(item["id"])
+            self.add_verdict("deny", item["id"], deny)
+            if self.recorder:
+                self.recorder.record(
+                    "program", tick=None, event="item_blocked",
+                    program_version=st["program_version"],
+                    item_id=item["id"], reason=deny)
+            return None
         params = dict(item.get("params") or {})
         if item["verb"] == "order_build":
             bid = self._discover_builder()
@@ -436,6 +671,8 @@ class Executor:
                 st = self._item_state[item["id"]]
                 st["resolution"] = "blocked"
                 st["reason"] = "E_NO_BUILDER"
+                st["verdict"] = ("no build-capable ship (BUILDERS "
+                                 "Mothership/Carrier — census in LEDGER)")
                 st["attempts"] += 1
                 self._suppressed.add(item["id"])
                 if self.recorder:

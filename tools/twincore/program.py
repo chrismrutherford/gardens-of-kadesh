@@ -39,6 +39,9 @@ MAX_DELEGATE_GRANTS = 8
 MAX_SHIPS_PER_ITEM = 64
 MAX_POSTURE_CHARS = 400
 POS_LIMIT = 100000.0
+# Draft v3 (FR-021/FR-022): arc is length-CLAMPED by the driver (never
+# rejected here); s1_context shape is a contract — malformed shape rejects.
+S1_CONTEXT_RANGES = {"max_exchanges": (0, 8), "ticks": (60, 100000)}
 
 ID_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789"
 
@@ -104,6 +107,12 @@ def validate_packet(raw, last_accepted_version=-1):
         if not isinstance(posture, str) or len(posture) > MAX_POSTURE_CHARS:
             _bad("posture must be a string ≤ %d chars" % MAX_POSTURE_CHARS)
 
+    arc = raw.get("arc")   # FR-021: any length accepted; driver clamps
+    if arc is not None and not isinstance(arc, str):
+        _bad("arc must be a string (running summary) or absent")
+
+    s1_context = _validate_s1_context(raw.get("s1_context"))
+
     delegate = _validate_delegate(raw.get("delegate"))
     production = _validate_production(raw.get("production"))
     tasking = _validate_tasking(raw.get("tasking"))
@@ -111,6 +120,22 @@ def validate_packet(raw, last_accepted_version=-1):
     _check_id_collisions(production, tasking)
     return Program(raw, delegate=delegate, production=production,
                    tasking=tasking)
+
+
+def _validate_s1_context(s1_context):
+    """FR-022: optional {max_exchanges: 0-8, ticks: 60-100000}; malformed
+    SHAPE rejects the whole packet (schema), ranges are policy."""
+    if s1_context is None:
+        return None
+    if not isinstance(s1_context, dict) or \
+            set(s1_context) != set(S1_CONTEXT_RANGES):
+        _bad("s1_context must be {max_exchanges: int, ticks: int} "
+             "exactly (FR-022)")
+    for k, (lo, hi) in S1_CONTEXT_RANGES.items():
+        v = s1_context[k]
+        if not _int(v) or not lo <= v <= hi:
+            _bad("s1_context.%s must be an int in [%d, %d]" % (k, lo, hi))
+    return dict(s1_context)
 
 
 def _check_id_collisions(production, tasking):
@@ -373,6 +398,8 @@ class Program:
         self.version = packet["version"]
         self.issued_tick = packet.get("issued_tick", 0)
         self.posture = packet.get("posture")
+        self.arc = packet.get("arc")          # FR-021 (driver length-clamps)
+        self.s1_context = packet.get("s1_context")  # FR-022 (validated shape)
         self._delegate = delegate
         self._production = production
         self._tasking = tasking
@@ -413,7 +440,7 @@ class Program:
 
 
 # --------------------------------------------------------------------------
-# budgeted input builders (FR-009/FR-013, FR-018)
+# budgeted input builders (FR-009 SUPERSET / FR-013, FR-018, Draft v3)
 # --------------------------------------------------------------------------
 
 def _section(header, lines):
@@ -424,13 +451,21 @@ def _section(header, lines):
 
 def build_pulse_input(*, charter_lines, p0_items, ledger_lines,
                       rollup_lines, prev_program_lines, prev_status_lines,
-                      micro_lines, reflex_lines, budget_units=None):
-    """Assemble the S2 pulse input; static-first (FR-009).
+                      micro_lines, reflex_lines, budget_units=None,
+                      arc_lines=None, enemy_lines=None, asteroid_lines=None,
+                      build_menu_lines=None, research_menu_lines=None,
+                      verdict_lines=None):
+    """Assemble the S2 pulse input — Draft v3 SUPERSET layout (FR-009):
+    static-first charter; arc (never absent — the driver seeds/stores it);
+    P0 verbatim; history echo (program + per-item statuses + verdicts);
+    rollups; own ledger; then the WORLD sections (enemy contacts, asteroid
+    ledger, build menu, research menu); S1 micro digest + reflex digest.
 
-    Budget enforcement (FR-013): prune order is (1) previous program
-    history (prev program echo + statuses — the OLDEST program history),
-    (2) oldest rollups, (3) oldest ledger lines. Charter and pinned P0
-    are never pruned. Every prune is recorded as an alert.
+    Budget enforcement (FR-013 prune order — least-to-most valuable,
+    world state cut LAST): (1) history echo, (2) rollups, (3) micro/reflex
+    digest, (4) enemy contacts, (5) asteroid quarters, (6) menus. The arc
+    header block and the charter are pinned (the driver length-clamped the
+    arc BEFORE this call — FR-021). Alerts record every prune.
     Returns (text, meta) with meta = {units, pruned, alerts}.
     """
     charter_lines = list(charter_lines or [])
@@ -441,58 +476,142 @@ def build_pulse_input(*, charter_lines, p0_items, ledger_lines,
     prev_status_lines = list(prev_status_lines or [])
     micro_lines = list(micro_lines or [])
     reflex_lines = list(reflex_lines or [])
+    arc_lines = list(arc_lines or []) or \
+        ["(empty — write your arc this pulse: phase, enemy shape, "
+         "tried/failed, plan)"]
+    enemy_lines = list(enemy_lines or [])
+    asteroid_lines = list(asteroid_lines or [])
+    build_menu_lines = list(build_menu_lines or [])
+    research_menu_lines = list(research_menu_lines or [])
+    verdict_lines = list(verdict_lines or [])
     alerts = []
 
-    def render(prune_stage=0):
+    def render(stage):
         parts = []
         parts += _section("# CHARTER", charter_lines)
+        parts += _section("# ARC (your summary so far)", arc_lines)
         if p0_items:
             parts += _section("# P0 (verbatim, pinned)",
                               [p["text"] if isinstance(p, dict) else str(p)
                                for p in p0_items])
-        parts += _section("# LEDGER", ledger_lines[prune_stage["ledger"]:])
-        parts += _section("# ROLLUPS", rollup_lines[prune_stage["rollups"]:])
-        parts += _section("# LAST PROGRAM", prev_program_lines)
-        parts += _section("# PROGRAM STATUS", prev_status_lines)
-        parts += _section("# S1 MICRO", micro_lines)
-        parts += _section("# REFLEXES", reflex_lines)
+        parts += _section("# ROLLUPS", rollup_lines[stage["rollups"]:])
+        parts += _section("# LEDGER", ledger_lines[stage["ledger"]:])
+        parts += _section("# ENEMY CONTACTS", enemy_lines[stage["enemy"]:])
+        parts += _section("# ASTEROID LEDGER",
+                          asteroid_lines[stage["asteroids"]:])
+        parts += _section("# BUILD MENU", build_menu_lines[stage["menus"]:])
+        parts += _section("# RESEARCH MENU",
+                          research_menu_lines[stage["menus"]:])
+        if stage["digest"] == 0:
+            parts += _section("# LAST PROGRAM", prev_program_lines)
+            parts += _section("# PROGRAM STATUS", prev_status_lines)
+            parts += _section("# VERDICTS", verdict_lines)
+            parts += _section("# S1 MICRO", micro_lines)
+            parts += _section("# REFLEXES", reflex_lines)
         return "\n".join(parts), parts
 
-    stage = {"ledger": 0, "rollups": 0}
+    stage = {"rollups": 0, "ledger": 0, "enemy": 0, "asteroids": 0,
+             "menus": 0, "digest": 0}
     text, parts = render(stage)
     pruned = []
     if budget_units is not None:
+        # FR-013 ladder — least valuable first; a stage that holds no
+        # content is SKIPPED (no phantom prunes), world sections last.
+        def step_history(stage):
+            if stage["digest"] == 0 and (prev_program_lines
+                                         or prev_status_lines
+                                         or verdict_lines or micro_lines
+                                         or reflex_lines):
+                stage["digest"] = 1
+                return "history"
+            return None
+
+        def step_rollups(stage):
+            if stage["rollups"] < len(rollup_lines):
+                stage["rollups"] = len(rollup_lines)
+                return "rollups"
+            return None
+
+        def step_digest(stage):
+            if stage["digest"] == 1 and (micro_lines or reflex_lines):
+                stage["digest"] = 2
+                return "micro/reflex digest"
+            return None
+
+        def step_enemy(stage):
+            if stage["enemy"] < len(enemy_lines):
+                stage["enemy"] = len(enemy_lines)
+                return "enemy contacts"
+            return None
+
+        def step_asteroids(stage):
+            if stage["asteroids"] < len(asteroid_lines):
+                stage["asteroids"] = min(len(asteroid_lines),
+                                         stage["asteroids"]
+                                         + max(1, len(asteroid_lines) // 4))
+                return "asteroid ledger"
+            return None
+
+        def step_menus(stage):
+            lim = max(len(build_menu_lines), len(research_menu_lines),
+                      stage["menus"])
+            if stage["menus"] < lim:
+                stage["menus"] = lim
+                return "build/research menus"
+            return None
+
+        def step_ledger(stage):
+            if stage["ledger"] < len(ledger_lines):
+                stage["ledger"] = min(len(ledger_lines),
+                                      stage["ledger"]
+                                      + max(1, len(ledger_lines) // 4))
+                return "ledger"
+            return None
+
+        ladder = (step_history, step_rollups, step_digest, step_enemy,
+                  step_asteroids, step_menus, step_ledger)
         while digest.units(text) > budget_units:
-            if prev_program_lines or prev_status_lines:
-                prev_program_lines, prev_status_lines = [], []
-                pruned.append("history")
-            elif stage["rollups"] < len(rollup_lines):
-                stage["rollups"] = len(rollup_lines)   # oldest first: all
-                pruned.append("rollups")
-            elif stage["ledger"] < len(ledger_lines):
-                stage["ledger"] += max(1, len(ledger_lines) // 4)
-                stage["ledger"] = min(stage["ledger"], len(ledger_lines))
-                pruned.append("ledger")
-            else:
-                break                                    # pinned floor hit
-            for p in pruned[-1:]:
-                alerts.append("budget prune: %s (%d units > %d)"
-                              % (p, digest.units(text), budget_units))
+            pruned.append(None)                # marker; replaced below
+            for fn in ladder:
+                name = fn(stage)
+                if name is not None:
+                    pruned[-1] = name
+                    break
+            if pruned[-1] is None:             # nothing left to prune
+                pruned.pop()
+                break                          # pinned floor hit
+            alerts.append("budget prune: %s (%d units > %d)"
+                          % (pruned[-1], digest.units(text), budget_units))
             text, parts = render(stage)
         if digest.units(text) > budget_units:
             alerts.append("over budget even after prune floor: %d > %d"
                           % (digest.units(text), budget_units))
-    meta = {"units": digest.units(text), "pruned": pruned, "alerts": alerts}
+    meta = {"units": digest.units(text), "pruned": pruned, "alerts": alerts,
+            "sections": {"arc": len(arc_lines), "enemy": len(enemy_lines),
+                         "asteroids": len(asteroid_lines),
+                         "build_menu": len(build_menu_lines),
+                         "research_menu": len(research_menu_lines),
+                         "verdicts": len(verdict_lines)}}
     return text, meta
 
 
 def build_micro_input(*, charter_lines, p0_items, envelope_lines,
                       live_lines, prev_micro_lines, prev_status_lines,
-                      budget_units=None):
-    """Assemble the S1 micro-input (FR-018): micro-charter + pinned P0 +
-    envelope echo + envelope-relevant live view + own previous packet."""
+                      budget_units=None, verdict_lines=None,
+                      history_lines=None):
+    """Assemble the S1 micro-input (FR-018, Draft v3): micro-charter +
+    pinned P0 + envelope echo + EXECUTOR VERDICTS (the rolling rulebook
+    S1 learns from, FR-020) + the s1_context history window (FR-022) +
+    envelope-relevant live view + own previous packet.
+
+    Prune (FR-013): the HISTORY window is the FIRST thing cut (oldest
+    half, then all) — verdicts/P0/envelope/live view survive; residual
+    overflow is a loud alert.
+    """
     charter_lines = list(charter_lines or [])
     envelope_lines = list(envelope_lines or [])
+    verdict_lines = list(verdict_lines or [])
+    history_lines = list(history_lines or [])
     lines = []
     lines += _section("# MICRO-CHARTER", charter_lines)
     if p0_items:
@@ -500,6 +619,8 @@ def build_micro_input(*, charter_lines, p0_items, envelope_lines,
                           [p["text"] if isinstance(p, dict) else str(p)
                            for p in p0_items])
     lines += _section("# ENVELOPE (verbatim grants)", envelope_lines)
+    lines += _section("# EXECUTOR VERDICTS", verdict_lines)
+    lines += _section("# MICRO HISTORY", history_lines)
     lines += _section("# LIVE VIEW", list(live_lines or []))
     lines += _section("# LAST MICRO", list(prev_micro_lines or []))
     lines += _section("# MICRO STATUS", list(prev_status_lines or []))
@@ -507,8 +628,41 @@ def build_micro_input(*, charter_lines, p0_items, envelope_lines,
     alerts = []
     meta = {"units": digest.units(text), "alerts": alerts}
     if budget_units is not None and meta["units"] > budget_units:
-        # micro input carries no prunable program history; the envelope +
-        # P0 are pinned, so an overflow is a loud alert (FR-013)
-        alerts.append("micro input over budget: %d > %d"
-                      % (meta["units"], budget_units))
+        # FR-013: history prunes FIRST (oldest half, then all); the rest
+        # is pinned for this channel, so residual overflow is loud.
+        if history_lines:
+            half = len(history_lines) // 2 or 1
+            history_lines = history_lines[half:]
+            alerts.append("budget prune: micro history older half "
+                          "(%d units > %d)" % (meta["units"], budget_units))
+            lines = _without_section(lines, "# MICRO HISTORY")
+            lines += _section("# MICRO HISTORY", history_lines)
+            text = "\n".join(lines)
+            meta["units"] = digest.units(text)
+        if meta["units"] > budget_units and history_lines:
+            history_lines = []
+            alerts.append("budget prune: micro history (all) "
+                          "(%d units > %d)" % (meta["units"], budget_units))
+            lines = _without_section(lines, "# MICRO HISTORY")
+            text = "\n".join(lines)
+            meta["units"] = digest.units(text)
+        if meta["units"] > budget_units:
+            alerts.append("micro input over budget: %d > %d"
+                          % (meta["units"], budget_units))
+    meta["history_kept"] = len(history_lines)
     return text, meta
+
+
+def _without_section(lines, header):
+    """Drop a previously rendered section (header + its lines) from the
+    joined render — used by the micro prune stages."""
+    out, dropping = [], False
+    for ln in lines:
+        if ln == header:
+            dropping = True
+            continue
+        if dropping and ln.startswith("# "):
+            dropping = False
+        if not dropping:
+            out.append(ln)
+    return out

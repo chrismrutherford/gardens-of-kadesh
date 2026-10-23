@@ -6,7 +6,7 @@
 
 **Tests**: Constitution III is NON-NEGOTIABLE — every implementation task lands WITH tests that run green (test-first inside each story). No module is "done" with red or missing tests.
 
-**Organization**: grouped by user story (US1–US6); each story independently implementable/testable. Implementation units are the implement/converge mini-Vs of the sdd workflow. US6 = S1 fast tactical tier in a delegation envelope (decision 17, 2026-10-23 amendment).
+**Organization**: grouped by user story (US1–US6); each story independently implementable/testable. Implementation units are the implement/converge mini-Vs of the sdd workflow. US6 = S1 fast tactical tier in a delegation envelope (decision 17). Phase 10 = Draft v3 amendment (decision 19, 2026-10-23): teaching firewall (FR-020), arc (FR-021), s1_context (FR-022), async feedback (FR-023), superset input (FR-009), continuous reflex floor (FR-006).
 
 ## Format: `[ID] [P?] [Story] Description`
 
@@ -99,9 +99,9 @@
 
 - [ ] T023 [US6] Write envelope tests FIRST: `tools/tests/twincore/test_program.py` gains delegate[] schema cases (grant verbs/subjects/zones/expiry; build/research not grantable implicitly; no-delegate ⇒ advisory-only; malformed grant rejects whole packet); `tools/tests/twincore/test_executor.py` gains the priority-law cases (program > S1 > reflex; S1 override only with `override_tasking`; overrides recorded; ≤6/tick cap spans channels); `tools/tests/twincore/test_v4_driver.py` gains violation/repair/degradation cases (out-of-envelope blocked + reason to S1; malformed micro-packet ≤1 repair then abort; S2 down → S1 continues in old envelope; S1 down → program + reflexes; both down → reflexes only)
 - [X] T024 [US6] Implement envelope validation in `tools/twincore/program.py` (delegate[] schema + `validate_against_envelope(micro_packet, program_version, tick)` API) + MicroInput builder (static micro-charter, P0 pinned, envelope-relevant live view, own micro statuses; ≤4k units)
-- [ ] T025 [US6] Implement `tools/twincore/s1micro.py`: S1 micro-pulse loop (async two-phase, P0 wake shared with S2, ≤1 bounded repair, whole-packet apply at tick boundary) with `micro` trail rows via recorder+queue
-- [ ] T026 [US6] Implement the micro command lane in `tools/twincore/executor.py`: validated S1 commands citing `{program_version, seq, grant_id, decision_id}` (item_id `s1:<decision_id>`), envelope legality checks, override recording, reflex subordination
-- [ ] T027 [US6] Wire dual loops in `tools/twincore/v4driver.py`: one GameClock, both async loops, single binding preserved, config `v4.budgets.s1_in=4096/s1_out=900`, cadences (s2 120 s default, s1 8 s default); extend `tools/tests/twincore/test_config.py`
+- [X] T025 [US6] S1 micro-pulse loop: async two-phase, P0 wake shared with S2, ≤1 bounded repair, whole-packet apply at tick boundary, `micro` trail rows via recorder+queue — IMPLEMENTED as `S1MicroLoop` INSIDE `tools/twincore/v4driver.py` (planned filename s1micro.py deviated; role per contract unchanged; 8 live-cycle tests in test_v4_driver.py green, commit 5a805d65)
+- [X] T026 [US6] Micro command lane in `tools/twincore/executor.py`: validated S1 commands citing `{program_version, seq, grant_id, decision_id}` (item_id `s1:<decision_id>`), envelope legality checks, override recording, reflex subordination (lands with 5a805d65; live-round hardening: scope resolution mechanical at executor, ships coercion for string/scalar args, dacc3d0bd)
+- [X] T027 [US6] Dual loops wired in `tools/twincore/v4driver.py`: one GameClock, both async loops, single binding preserved, config `v4.budgets.s1_in=4096/s1_out=900`, cadences (s2 120 s default, s1 8 s default); test_config.py extended (lands with 5a805d65)
 - [ ] T028 [US6] Harness measures for the tier (extends T018/T019): S1-adherence (micro-commands per grant), envelope violation counts, override counts, micro cadence adherence
 
 **Checkpoint**: between S2 pulses the seat defends itself inside S2-licensed bounds, and nothing else.
@@ -110,18 +110,40 @@
 
 ## Phase 9: Polish & Convergence
 
-- [ ] T020 [P] Charter/playbook load: render `documentation/community/cpu-player-playbook.md` verbatim into the S2 charter prefix AND S1's micro-charter (materials, retunable; harness verifies per FR-016)
+- [ ] T020 [P] Charter/playbook load: render `documentation/community/cpu-player-playbook.md` verbatim into the S2 charter prefix AND S1's micro-charter (materials, retunable; harness verifies per FR-016). v3 charter adds the arc rewrite instruction to S2 ("rewrite `arc` every pulse — running story: phase, enemy shape, tried/failed, plan") and the verdict-reading note to S1's micro-charter
 - [ ] T021 Run `quickstart.md` end-to-end (unit suites + launch-and-poll live round + series report); collect SC evidence
 - [ ] T022 Convergence verification report against spec.md SC-001…SC-008 with trail citations; user review + sign-off; `spec_finish`
+- [X] T039 [P] Hygiene: delete stale `tools/tests/test_agent_multi.py` (v4-only prune leftover; imports the deleted `agent` module and breaks FULL `tools/tests` collection) and any other dead imports so `python -m pytest tools/tests -q` collects clean
+
+---
+
+## Phase 10: Draft v3 — teaching firewall + awareness (decision 19)
+
+**Goal**: fix the live-round failure class — blind inputs, silent denials, one-shot reflexes, unbounded memory. Every change is doctrine-free plumbing: verdicts explain, arcs remember, windows truncate, events report.
+
+**Independent Test** (composite of US1/US2/US3/US6 v3 criteria): a live round where the pulse input provably contains enemy contacts/asteroid/menus; a guessed tech name returns as `engine_denied` + verdict once and does not recur; the arc renders every pulse; a parade collector re-harvests ≤1 tick; Qwen denials teach (repeat-identical-denial rate → 0 on the same cause).
+
+- [X] T029 [P] [US1] Write superset-input tests FIRST in `tools/tests/twincore/test_program.py`: `build_pulse_input` renders `# ARC`, ENEMY CONTACTS (same builder as S1's live view), asteroid ledger (nearest-first, top-N + totals), build menu (unlocked hulls + costs + buildQueue), research menu (researchable + missing prereqs + labs/busy + researched); prune order applies (world sections last; arc length-clamped not dropped); empty contacts → "none observed" line, no fabrication
+- [X] T030 [US1] (lands with commit: superset builders) Implement superset builders: `program.py` renders the new sections from the driver-assembled view (enemy contacts reused from v4driver's S1 builder); `v4driver.py` ledger assembly passes enemy contacts + asteroids + unlocked hulls/techs + buildQueue/lab state into `build_pulse_input` (FR-009); config `v4.asteroid_top_n`/`v4.arc_chars`/`v4.verdict_chars` + test_config.py cases
+- [X] T031 [P] [US2] Write verdict tests FIRST in `tools/tests/twincore/test_executor.py` + `test_program.py`: envelope deny verdict names licensed verbs/ships; unknown tech/hull verdict names legal alternatives; coercion verdicts (scalar→array); cap-clamp verdicts; every verdict → `validation` row + appears in S2 program-status render AND S1 verdict-section render (≤K verdicts, budget-bounded); verdict text ≤ `v4.verdict_chars`
+- [X] T032 [US2] Implement the verdict stream: `executor.py` emits verdicts for deny/coerce/clamp (recorder `validation` rows + in-memory last-K list per channel); `program.py` renders verdict sections into pulse/micro inputs; `v4driver.py` engine-event consumer folds orderRejected/shipDestroyed/research events into per-item statuses (`engine_denied: aux`) + verdicts with `# repeat` recurrence marker (FR-020/FR-023)
+- [X] T033 [P] [US3] Write arc tests FIRST in `tools/tests/twincore/test_program.py` + `test_v4_driver.py`: packet `arc` field accepted; driver stores latest arc, next pulse renders `# ARC (your summary so far)`; missing/stale arc → code-seeded from mechanical rollups (pulse input NEVER renders an empty arc line); oversize arc → length-clamped + clamp verdict; schema: malformed `s1_context` shape rejects packet, oversize `arc` does not
+- [X] T034 [US3] Implement the arc store: program-schema validation (arc optional/any-length; s1_context `{max_exchanges: 0–8, ticks: 60–100000}` shape); `v4driver.py` PulseLoop stores latest program arc, passes into `build_pulse_input`; rollup seeder for missing arc (FR-021)
+- [X] T035 [P] [US6] Write s1_context tests FIRST in `tools/tests/twincore/test_program.py` + `test_v4_driver.py`: micro-input carries up to `max_exchanges` previous packets+statuses within `ticks`; truncation is mechanical and deterministic; absent s1_context ⇒ stateless input (current behaviour); budget breach prunes history FIRST (arc/verdicts/world sections survive) (FR-022/FR-013)
+- [X] T036 [US6] Implement the history truncator: micro lane keeps rolling history keyed by the CURRENT program's s1_context; prune order enforced in `build_micro_input`; `# EXECUTOR VERDICTS` section precedes history (FR-018)
+- [X] T037 [US2] Continuous reflex floor: test (parade/no-harvest collector re-dispatched EVERY tick; program-covered ships skipped; determinism preserved) + implement re-check loop in `executor.py` reflex pass (FR-006; live: RC 273 idled ~20k ticks in parade)
+- [X] T038 [US5] Harness measures as pure trail-row functions in `tools/twincore/harness.py` `v4_draftv3_measures()` (deny rate, repeated-identical-denial rate, verdict legibility, arc coverage/max-gap, reflex stale re-dispatches, superset presence from sections meta) — series/report CLI assembly stays in T018/T019 (harness stub; seeded-trail fixtures in test_harness.py): deny rate per channel, repeated-identical-denial rate, verdict legibility (≥1 allowed alternative), arc freshness (byte-age since last S2 rewrite), reflex idle-RC re-dispatch latency (idle/parade → harvest order ≤1 tick); SC-002 superset-presence measure from archived input rows
+
+**Checkpoint**: the strategist sees the whole game, learns from every refusal it triggers, remembers via the arc, and the floor under everything keeps the economy moving — verified by tests and the next live round.
 
 ---
 
 ## Dependencies & Execution Order
 
-- T001–T002 → T003–T005 → US1 (T006–T010) → US2 (T011–T012) → US3 (T013–T014) → US6 (T023–T028; needs T004 envelope schema + T007 executor lanes) → US4 (T015–T017) → US5 (T018–T019) → T020–T022 (polish, now includes US6 measures in T028 + convergence T022 covers FR-017–FR-019).
+- T001–T002 → T003–T005 → US1 (T006–T010) → US2 (T011–T012) → US3 (T013–T014) → US6 (T023–T028; needs T004 envelope schema + T007 executor lanes) → US4 (T015–T017) → US5 (T018–T019) → **Phase 10 (T029–T038; needs T004/T007/T009 + executor lanes)** → T020–T022 (polish, now includes US6 measures in T028 + convergence T022 covers FR-017–FR-023).
 - Within each story: test tasks before implementation tasks (Constitution III); each story lands as one implement+converge mini-V with green tests
-- Parallel-safe: T001/T002/T005/T015; T003–T004 pair; T006–T007 and T008–T009 pairs
-- MVP = US1 + US2 (both P1): the seat lives and obeys; US6 closes the strategist blind window; US3/US4/US5 harden it
+- Parallel-safe: T001/T002/T005/T015/T029/T031/T033/T035/T039; T003–T004 pair; T006–T007 and T008–T009 pairs; T029→T030, T031→T032, T033→T034, T035→T036 pairs
+- MVP = US1 + US2 (both P1): the seat lives and obeys; US6 closes the strategist blind window; Phase 10 closes the live-round failure class; US3/US4/US5 harden it
 
 ## Notes
 

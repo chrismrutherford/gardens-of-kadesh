@@ -156,3 +156,45 @@ rounds show the envelope unnecessary.
 - Playbook doc load path: `documentation/community/cpu-player-playbook.md`
   verbatim into S2's charter AND S1's micro-charter (data files, verified
   by the harness per FR-016).
+
+## D9 — Verdict text as the bounded teach channel (Draft v3, decision 19)
+
+**Decision**: executor denies/coerces/clamps and engine async rejections
+emit ONE actionable verdict line (refused + what IS allowed), bounded
+(~200 chars) and streamed to three sinks: `validation` trail rows, S2's
+per-item ProgramStatus, S1's rolling verdict section. The executor never
+invents orders — the verdict restates current legality only; recurring
+identical denials gain a `# repeat <n>` marker so S2 sees a loop.
+**Rationale**: live round — guessed tech `MassDrive2Kt` was engine-rejected
+async and invisible (status said `applied`); Qwen repeated empty-param
+calls forever in silence; GLM refused research guessing tech names. A deny
+that names the allowed alternative converts the violation into curriculum.
+**Alternatives**: (a) raw aux codes only — rejected: GLM/Qwen cannot
+interpret `E_BAD_REQUEST` reliably, and issued-vs-accepted stayed
+conflated; (b) executor auto-corrects the model's item (e.g. swap tech) —
+rejected: invents orders, violates FR-004/FR-005 doctrine-free law;
+(c) reject whole packets on unknown names — rejected: all-or-nothing
+already governs schema; semantic names should cost one item, not one pulse.
+
+## D10 — Arc: model-authored memory, code-enforced budget (Draft v3)
+
+**Decision**: program packet gains `arc` (default ≤600 chars) — S2's
+rewritten running story each pulse; driver stores LATEST only, re-renders
+every pulse input (`# ARC (your summary so far)`), code-seeds from
+mechanical rollups when missing/stale, length-clamps oversize with a
+verdict (never drops, never rejects). Raw history NEVER re-enters S2's
+window (trail keeps it for replay/harness). S1's memory is symmetric but
+S2-owned: `s1_context {max_exchanges, ticks}` truncates S1's rolling
+micro-history mechanically, FIRST-pruned under budget breach; absent ⇒
+stateless (current behaviour).
+**Rationale**: live round — GLM burned thinking tokens each pulse
+reconstructing "the last program issued at 32202, applied at 47202"
+because nothing compacted its own past; its context is ~24k and the pulse
+input is a 12k budget. Model-authored narrative + code-enforced budgets
+keeps meaning without unbounded growth, and keeps doctrine out (the arc is
+the strategist's own words, not driver-synthesised doctrine).
+**Alternatives**: (a) code-summarised history digests fed to S2 — rejected
+(driver-authored narrative = hidden doctrine, FR-004 risk) though the
+mechanical rollup NUMBERS stay code-made; (b) S1 keeps full conversation
+history — rejected: unbounded growth vs the 4k budget; (c) vector/embedded
+memory stores — rejected: overkill vs a 600-char arc; YAGNI (Constitution V).

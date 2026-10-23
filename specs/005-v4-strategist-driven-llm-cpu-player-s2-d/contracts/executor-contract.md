@@ -10,7 +10,8 @@ thresholds (FR-004). Its entire behaviour is:
 ```python
 def on_tick(tick, state):
     issue_program_items(tick, state)   # mechanical translation
-    run_reflexes(tick, state)          # gap-fillers ONLY
+    run_reflexes(tick, state)          # gap-fillers ONLY (re-checked every tick)
+    emit_verdicts(tick)                # explain THIS tick's denies/coerces/clamps
 ```
 
 ## 1. Program-item translation (per tick)
@@ -32,6 +33,12 @@ def on_tick(tick, state):
   packet, revalidated against the fresh ledger.
 - Every minted command cites `{version, item_id}` — recorded in the
   ProgramStatus and the trail (traceability guarantee, SC-002).
+- ISSUED ≠ ACCEPTED (FR-023): an engine `orderRejected` (async) resolves
+  the item to `engine_denied: aux` via the driver's event consumer and
+  emits a verdict naming the legal alternatives (e.g. `order_research
+  tech 'MassDrive2Kt' unknown; researchable now: [Chassis1, ...]`). The
+  busy-labs engine rejection stays `rejected` with aux=5 + verdict
+  ("lab busy; in progress: <tech>"), item reissues next tick.
 
 ## 2. Item lifecycle
 
@@ -45,9 +52,14 @@ def on_tick(tick, state):
 ## 3. Reflexes (FR-006 — EXACTLY two)
 
 ```
-reflex_harvest: collector idle (no live order, incl. parade state)
-              → order_harvest(nearest_asteroid)   # nearest by euclidean
-              #    distance; tie-break: lower resource id (determinism, IV)
+reflex_harvest: collector idle (no live order, incl. parade/no-harvest
+              state) → order_harvest(nearest-value asteroid)
+              # nearest by euclidean distance; tie-break: lower resource
+              # id (determinism, IV). Re-checked EVERY tick — a collector
+              # that drifted back to idle/parade is re-dispatched again
+              # (≤1 tick from idle/parade to a harvest order; the reflex
+              # is a floor condition, not a one-shot — live-round lesson:
+              # an RC idled ~20k ticks in parade).
 reflex_deliver: collector full → order_dock(nearest dock-capable own ship)
 ```
 
@@ -64,6 +76,38 @@ reflex_deliver: collector full → order_dock(nearest dock-capable own ship)
   per-tick cap (all channels combined).
 - No other autonomous behaviour exists — no fallback doctrine when S2 is
   unreachable (FR-012: last program + reflexes stand, nothing invented).
+
+## 6. Teaching firewall (FR-020 — the teach duty)
+
+Every deny, coercion, or clamp this executor performs — validator
+blocking, subject coercion (e.g. scalar → array ships), per-tick cap
+clamping, envelope refusal, engine-denied resolution — emits ONE
+actionable verdict line:
+
+```
+kind=deny       subject=s1:m7   order_attack ships[250]: 250 not in grant
+                d1 scope:defense; defense ships: [2,3,4,5,6,253,254]
+kind=engine_denied item=p2      order_research 'MassDrive2Kt' unknown;
+                researchable now: [Chassis1, TargetingSystems, ...]
+kind=coerce     subject=s1:m2   order_guard ships=2 coerced to [2]
+kind=clamp      subject=p1      per-tick cap reached (6); item waits
+```
+
+Rules:
+- The text names what was refused AND what IS currently allowed (≥1
+  alternative — legibility is a SC-006 measure). Bounded text (config
+  `v4.verdict_chars`, default ~200); the cap counts inside the channel
+  budget breach rules (FR-013).
+- Sinks (all three, every verdict): (a) a `validation` trail row;
+  (b) S2's per-item ProgramStatus next pulse; (c) S1's rolling verdict
+  section next micro-input (last K verdicts, budget-bounded).
+- The executor NEVER invents orders — verdicts explain only its own
+  decisions; no recommendation beyond restating current legality.
+- Engine-side asynchronous rejections fold into the same stream with
+  their aux codes (FR-023) — nothing fails invisibly, and the same
+  denial text must NOT recur unchanged forever (repeated-identical-
+  denial rate is a SC-006 measure; if it does repeat, the verdict gains
+  a `# repeat` marker counting recurrences so S2 sees the loop).
 
 ## 4. Degradation ladder (FR-012, v4 wording)
 

@@ -325,12 +325,14 @@ class TestPulseInput(unittest.TestCase):
             prev_program_lines=["p v1"], prev_status_lines=["p1 applied"],
             micro_lines=["m seq1 ok"], reflex_lines=["harvest 100->500"])
         self.assertTrue(text.startswith("# CHARTER"))
-        order = ["# CHARTER", "# P0", "# LEDGER", "# ROLLUPS",
+        order = ["# CHARTER", "# ARC (your summary so far)", "# P0",
+                 "# ROLLUPS", "# LEDGER",
                  "# LAST PROGRAM", "# PROGRAM STATUS", "# S1 MICRO",
                  "# REFLEXES"]
         idxs = [text.index(h) for h in order]
         self.assertEqual(idxs, sorted(idxs))
         self.assertIn("defended_zone_breach tick=5", text)
+        self.assertIn("# ARC (your summary so far)", text)   # never absent
         self.assertEqual(meta["pruned"], [])
         self.assertEqual(meta["alerts"], [])
 
@@ -401,3 +403,137 @@ class TestConftestBuilders(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestDraftV3(unittest.TestCase):
+    """Decision 19 — teaching firewall render contract + arc/s1_context
+    schema + superset input (FR-009/013/020/021/022)."""
+
+    # -- superset sections (FR-009) -------------------------------------
+    def test_world_sections_render(self):
+        text, meta = P.build_pulse_input(
+            charter_lines=["seat 0"], p0_items=[],
+            ledger_lines=["ship 1 MS"], rollup_lines=["r1"],
+            prev_program_lines=["p"], prev_status_lines=["s"],
+            micro_lines=[], reflex_lines=[],
+            arc_lines=["opening: econ ramp, no contact"],
+            enemy_lines=["ENEMY CONTACTS:", "  enemy 10 Mothership pos[-1,2,3] dist_to_base=123"],
+            asteroid_lines=["ast 500 pos[0,0,0] value=400"],
+            build_menu_lines=["buildable: ResourceCollector, LightInterceptor"],
+            research_menu_lines=["researchable: Chassis1 (needed for: HeavyCorvette)"])
+        for h in ("# ARC (your summary so far)", "# ENEMY CONTACTS",
+                  "# ASTEROID LEDGER", "# BUILD MENU", "# RESEARCH MENU"):
+            self.assertIn(h, text)
+        self.assertIn("enemy 10 Mothership", text)
+        self.assertIn("ast 500", text)
+        self.assertIn("opening: econ ramp", text)
+        self.assertEqual(meta["alerts"], [])
+
+    def test_arc_never_absent(self):
+        text, _ = P.build_pulse_input(
+            charter_lines=["seat"], p0_items=[], ledger_lines=[],
+            rollup_lines=[], prev_program_lines=[], prev_status_lines=[],
+            micro_lines=[], reflex_lines=[])     # no arc passed at all
+        self.assertIn("# ARC (your summary so far)", text)
+        self.assertIn("(empty — write your arc this pulse", text)
+
+    # -- prune order: world sections LAST --------------------------------
+    def test_prune_order_history_rollups_digest_world_ledger(self):
+        ledger = ["l%d %s" % (i, "x" * 30) for i in range(20)]
+        enemy = ["enemy %d %s" % (i, "y" * 80) for i in range(8)]
+        asts = ["ast %d %s" % (i, "z" * 60) for i in range(10)]
+        menus = ["menu %s" % ("m" * 100) for _ in range(4)]
+        micro = ["micro %s" % ("q" * 60) for _ in range(3)]
+        text, meta = P.build_pulse_input(
+            charter_lines=["seat"], p0_items=["P0 pinned"],
+            ledger_lines=ledger, rollup_lines=["r1 long " + "a" * 200],
+            prev_program_lines=["prog " + "p" * 300],
+            prev_status_lines=["st " + "p" * 300],
+            micro_lines=[], reflex_lines=[],
+            arc_lines=["arc " + "w" * 50],
+            enemy_lines=enemy,
+            asteroid_lines=asts,
+            build_menu_lines=menus, research_menu_lines=[],
+            budget_units=100)
+        # pinned survivors
+        self.assertIn("# CHARTER", text)
+        self.assertIn("P0 pinned", text)
+        self.assertIn("# ARC (your summary so far)", text)
+        self.assertIn("arc ", text)
+        self.assertEqual(meta["pruned"][0], "history")
+        self.assertEqual(meta["pruned"][1], "rollups")
+        # world sections must be pruned AFTER the digest but BEFORE ledger
+        self.assertIn("enemy contacts", meta["pruned"])
+        self.assertIn("asteroid ledger", meta["pruned"])
+        self.assertIn("build/research menus", meta["pruned"])
+        self.assertLess(meta["pruned"].index("enemy contacts"),
+                        meta["pruned"].index("ledger"))
+        self.assertLess(meta["pruned"].index("build/research menus"),
+                        meta["pruned"].index("ledger"))
+
+    # -- arc schema (FR-021) ---------------------------------------------
+    def test_arc_any_length_accepted(self):
+        prog = P.validate_packet({"version": 2, "arc": "x" * 5000}, 1)
+        self.assertEqual(prog.arc, "x" * 5000)   # driver clamps, not schema
+
+    def test_arc_must_be_string(self):
+        raises_reason(lambda: P.validate_packet(
+            {"version": 2, "arc": 7}, 1), "arc")
+
+    # -- s1_context schema (FR-022) ---------------------------------------
+    def test_s1_context_valid(self):
+        prog = P.validate_packet(
+            {"version": 2, "s1_context": {"max_exchanges": 2, "ticks": 600}},
+            1)
+        self.assertEqual(prog.s1_context["max_exchanges"], 2)
+
+    def test_s1_context_bad_shape_rejects(self):
+        raises_reason(lambda: P.validate_packet(
+            {"version": 2, "s1_context": {"max": 1}}, 1), "s1_context")
+        raises_reason(lambda: P.validate_packet(
+            {"version": 2, "s1_context": {"max_exchanges": 2,
+                                          "ticks": 10}}, 1), "ticks")
+        raises_reason(lambda: P.validate_packet(
+            {"version": 2, "s1_context": {"max_exchanges": 99,
+                                          "ticks": 600}}, 1), "max_exchanges")
+        raises_reason(lambda: P.validate_packet(
+            {"version": 2, "s1_context": "now"}, 1), "s1_context")
+
+    # -- micro input: verdicts + history + prune-first ---------------------
+    def test_micro_verdicts_and_history_render(self):
+        text, meta = P.build_micro_input(
+            charter_lines=["seat"], p0_items=[],
+            envelope_lines=["d1 verbs [order_attack]"],
+            live_lines=["ship 2 LI"],
+            prev_micro_lines=[], prev_status_lines=[],
+            verdict_lines=["deny s1:m1 order_attack ships[250]: 250 not in "
+                           "grant d1 scope:defense; defense ships: [2,3]"],
+            history_lines=["hist seq1: guard applied"])
+        self.assertIn("# EXECUTOR VERDICTS", text)
+        self.assertIn("deny s1:m1", text)
+        self.assertIn("# MICRO HISTORY", text)
+        self.assertIn("hist seq1", text)
+        self.assertEqual(meta["history_kept"], 1)
+
+    def test_micro_history_pruned_first(self):
+        big_hist = ["hist %d %s" % (i, "h" * 300) for i in range(6)]
+        text, meta = P.build_micro_input(
+            charter_lines=["seat"], p0_items=["P0"],
+            envelope_lines=["d1 ..."], live_lines=["l"],
+            prev_micro_lines=[], prev_status_lines=[],
+            verdict_lines=["deny s1:m1 x" + "v" * 100],
+            history_lines=big_hist, budget_units=200)
+        self.assertTrue(meta["alerts"])
+        self.assertTrue(any("micro history" in a for a in meta["alerts"]))
+        # P0 + verdicts + envelope survive the history prune
+        self.assertIn("P0", text)
+        self.assertIn("deny s1:m1", text)
+        self.assertEqual(meta["history_kept"], 0)   # window fully cut first
+
+    def test_micro_stateless_without_history(self):
+        text, meta = P.build_micro_input(
+            charter_lines=["seat"], p0_items=[], envelope_lines=["d1"],
+            live_lines=["l"], prev_micro_lines=[], prev_status_lines=[],
+            budget_units=10 ** 6)
+        self.assertNotIn("# MICRO HISTORY", text)
+        self.assertNotIn("# EXECUTOR VERDICTS", text)
+        self.assertEqual(meta["history_kept"], 0)

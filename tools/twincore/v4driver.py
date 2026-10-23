@@ -15,6 +15,7 @@ LAST valid program, the failure is recorded (`packet_rejected` +
 control modules (s1tick/economy/s2pulse/directive) are NOT referenced.
 """
 import json
+import math
 import os
 import sys
 import threading
@@ -69,6 +70,14 @@ def _sid(v):
         return 0
 
 
+def _int_(v):
+    """int or None (bank/rollup values may be absent)."""
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
+
+
 def _dist2(a, b3):
     """Squared distance between point a [x,y,z] and point b3 [x,y,z]."""
     ax, ay, az = (a + [0, 0, 0])[:3] if isinstance(a, list) else (0, 0, 0)
@@ -100,6 +109,115 @@ DEFAULT_S2_IN = 12288
 DEFAULT_S2_OUT = 3072
 DEFAULT_MAX_REPAIRS = 1
 
+
+# --------------------------------------------------------------------------
+# world-section builders (FR-009 superset; shared by S2 ledger + S1 view)
+# --------------------------------------------------------------------------
+
+def own_base_pos(view, own_player=0):
+    for s in (view.get("ships_all") or {}).values():
+        if s.get("owner") == own_player and (
+                "Mothership" in (s.get("type") or "")
+                or "Carrier" in (s.get("type") or "")):
+            return list(s.get("pos") or [0, 0, 0])
+    return None
+
+
+def enemy_lines(view, own_player=0, base=None, cap=16):
+    """ENEMY CONTACTS rows: `enemy <id> <hull> pos[..] dist_to_base=<m>`
+    (nearest first). Empty contacts ⇒ explicit 'none' — no fabrication."""
+    base = base if base is not None else own_base_pos(view, own_player)
+    rows = []
+    for sid, s in sorted((view.get("ships_all") or {}).items(),
+                         key=lambda kv: _sid(kv[0])):
+        if s.get("owner") == own_player:
+            continue
+        pos = list(s.get("pos") or [0, 0, 0])
+        dist = int(math.sqrt(_dist2(pos, base))) if base else -1
+        rows.append((dist, "enemy %s %s pos%s dist_to_base=%d"
+                     % (sid, s.get("type") or "?",
+                        [int(v) for v in pos[:3]], dist)))
+    rows.sort(key=lambda r: (r[0], r[1]))
+    if not rows:
+        return ["ENEMY CONTACTS: none observed"]
+    out = [t for _d, t in rows[:cap]]
+    if len(rows) > cap:
+        out.append("(+%d more enemy contacts)" % (len(rows) - cap))
+    return out
+
+
+def asteroid_lines(view, own_player=0, base=None, top_n=32):
+    """ASTEROID LEDGER rows: `ast <id> pos[..] value=<RU>` nearest-first,
+    plus totals (S2 must be able to NAME harvest targets)."""
+    base = base if base is not None else own_base_pos(view, own_player)
+    asts = []
+    for rid, r in ((view.get("resources") or {}).items()):
+        pos = list(r.get("pos") or [0, 0, 0])
+        val = r.get("value", r.get("ru", 0)) or 0
+        dist = _dist2(pos, base) if base else 0
+        asts.append((dist, int(_sid(rid)), pos, val))
+    asts.sort(key=lambda t: (t[0], t[1]))
+    total = sum(int(t[3]) for t in asts)
+    lines = ["asteroids in view: %d (total %d RU)" % (len(asts), total)]
+    for _d, rid, pos, val in asts[:max(1, int(top_n))]:
+        lines.append("ast %d pos%s value=%d"
+                     % (rid, [int(v) for v in pos[:3]], int(val)))
+    if len(asts) > top_n:
+        lines.append("(+%d more, value sorted omitted)" % (len(asts) - top_n))
+    return lines
+
+
+def build_menu_lines(view):
+    """BUILD MENU: unlocked hulls + currently locked-with-needs + queue
+    (no costs — the engine snapshot does not expose per-hull costs; we
+    never fabricate)."""
+    tt = view.get("techTree") or {}
+    unlocked, locked = [], []
+    seen_ishull = set()
+    for s in (view.get("ships_all") or {}).values():
+        hull = s.get("type")
+        if hull:
+            seen_ishull.add(hull)
+    for ent in tt.get("locked") or []:
+        hull = ent.get("type")
+        seen_ishull.add(hull)
+        needs = list(ent.get("missing") or [])
+        if needs:
+            locked.append((hull, needs))
+        else:
+            unlocked.append(hull)
+    for hull in sorted(seen_ishull):
+        if hull not in unlocked and hull not in [h for h, _ in locked]:
+            unlocked.append(hull)     # observed hull without lock entry
+    lines = []
+    if unlocked:
+        lines.append("buildable now: %s" % ", ".join(sorted(set(unlocked))))
+    for hull, needs in sorted(locked, key=lambda t: t[0]):
+        lines.append("locked: %s (needs research: %s)" % (hull, needs))
+    bq = view.get("buildQueue") or []
+    if bq:
+        lines.append("buildQueue: %s" % json.dumps(bq, default=str)[:220])
+    return lines or ["build menu: no techTree data observed"]
+
+
+def research_menu_lines(view):
+    """RESEARCH MENU: researchable techs (union of missing prereqs, minus
+    researched) with the hulls that need them, labs and busy state."""
+    tt = view.get("techTree") or {}
+    researched = set(tt.get("researched") or [])
+    needers = {}
+    for ent in tt.get("locked") or []:
+        for tech in ent.get("missing") or []:
+            needers.setdefault(tech, []).append(ent.get("type"))
+    researchable = sorted(set(needers) - researched)
+    lines = ["labs=%s lab_busy=%s (canResearch)"
+             % (tt.get("labs"), tt.get("canResearch"))]
+    for tech in researchable:
+        lines.append("tech %s (needed for: %s)"
+                     % (tech, ", ".join(sorted(set(needers[tech])))))
+    lines.append("researched: %s" % sorted(researched))
+    return lines
+
 STATIC_CHARTER = (
     "You are S2, the strategist of seat {seat}. Reply with ONLY one JSON "
     "object, the program packet:\n"
@@ -107,6 +225,11 @@ STATIC_CHARTER = (
     "  \"version\": <int strictly greater than your previous packet>,\n"
     "  \"issued_tick\": <int>,\n"
     "  \"posture\": \"<short note for your own next pulse, optional>\",\n"
+    "  \"arc\": \"<REWRITE EVERY PULSE — your running high-level story: "
+    "match phase, enemy shape shown, what was tried/failed, current "
+    "plan; ≤600 chars>\",\n"
+    "  \"s1_context\": {\"max_exchanges\": <int 0-8>, \"ticks\": <int>},"
+    "  // optional: how much history S1 may keep\n"
     "  \"delegate\": [ <GRANTS for S1, your fast tactical helper — or []>\n"
     "  ],\n"
     "  \"production\": [<order items>], \"tasking\": [<fleet items>]\n"
@@ -130,10 +253,15 @@ STATIC_CHARTER = (
     "105], \"target\": 881}\n"
     "  {\"id\": \"t2\", \"verb\": \"order_move\", \"ships\": [104], "
     "\"pos\": [-1200, 0, 640]}\n"
-    "item ids pN/tN are 1-8 chars [a-z0-9], all unique; ships ids come "
-    "from the LEDGER section below (match-scoped); target 0/missing ids "
-    "are rejected. Whole packet or nothing: any schema violation rejects "
-    "everything and your previous packet stays in force.\n")
+    "tech and hull names MUST come from the RESEARCH MENU / BUILD MENU "
+    "sections below (an unknown name is denied with a verdict naming the "
+    "legal alternatives); ship/resource ids come from the LEDGER / "
+    "ENEMY CONTACTS / ASTEROID LEDGER sections (match-scoped); target "
+    "0/missing ids are rejected. Whole packet or nothing: any schema "
+    "violation rejects everything and your previous packet stays in "
+    "force. Executor verdicts in PROGRAM STATUS / # VERDICTS tell you "
+    "what was refused and what is currently allowed — never repeat a "
+    "denied item unchanged.\n")
 
 
 class PulseLoop:
@@ -142,7 +270,8 @@ class PulseLoop:
     def __init__(self, channel, executor, recorder, ledger,
                  pulse_ticks=None, s2_in=DEFAULT_S2_IN,
                  s2_out=DEFAULT_S2_OUT, max_repairs=DEFAULT_MAX_REPAIRS,
-                 charter_lines=None, own_player=0):
+                 charter_lines=None, own_player=0, arc_chars=600,
+                 asteroid_top_n=32):
         self.channel = channel
         self.executor = executor
         self.recorder = recorder
@@ -153,12 +282,82 @@ class PulseLoop:
         self.max_repairs = max_repairs
         self.charter_lines = list(charter_lines or [])
         self.own_player = own_player
+        # FR-021 arc store: latest model-authored arc (length-clamped),
+        # re-rendered into EVERY pulse input; never absent.
+        self.arc_chars = int(arc_chars)
+        self.arc_text = None
+        self.arc_tick = None
+        self.asteroid_top_n = int(asteroid_top_n)
+        # mechanical rollups since last pulse (code-computed truth; FR-009)
+        self._rollup_prev = None
+        self.kills_since_pulse = 0
         self.next_pulse_at = self.pulse_ticks
         self._wake = False
         self.last_version = -1
         self._worker = None
         self._result = None
         self._pulse_count = 0
+
+    # -- ARC store (FR-021) -----------------------------------------------
+    def set_arc(self, arc, tick):
+        """Store the LATEST arc from an accepted program; length-clamp
+        with a verdict when over budget (never dropped, never rejected)."""
+        if arc is None:
+            return False
+        text = str(arc)
+        clamped = False
+        if len(text) > self.arc_chars:
+            text = text[:self.arc_chars]
+            clamped = True
+        self.arc_text = text
+        self.arc_tick = tick
+        return clamped
+
+    def _arc_line(self, view):
+        """The arc the pulse input ALWAYS renders (FR-021): latest stored
+        arc (with its stamp — freshness, SC-006), else the code-seeded
+        opening line (mechanical, no doctrine)."""
+        if self.arc_text:
+            return "[stored at tick %s] %s" % (self.arc_tick, self.arc_text)
+        bank = view.get("bank")
+        n_own = sum(1 for s in (view.get("ships_all") or {}).values()
+                    if s.get("owner") == self.own_player)
+        return ("(seeded by code — write yours this pulse) match opening; "
+                "bank %s; own ships %d" % (bank, n_own))
+
+    def _mechanical_rollups(self, view):
+        """Rollups since the last pulse — code-computed truth (FR-009):
+        bank delta, builds materialized (new own ship ids), research
+        accepted (new researched techs), kills (from the event consumer).
+        NO doctrine: numbers only."""
+        ships = view.get("ships_all") or {}
+        own_ids = {k for k, s in ships.items()
+                   if s.get("owner") == self.own_player}
+        researched = set((view.get("techTree") or {}).get("researched")
+                         or [])
+        cur = {"bank": view.get("bank"), "own": own_ids,
+               "tech": researched}
+        if self._rollup_prev is None:
+            self._rollup_prev = cur
+            return ["since last pulse: (first observation) bank %s; own "
+                    "ships %d" % (view.get("bank"), len(own_ids))]
+        bank0 = _int_(self._rollup_prev["bank"])
+        bank1 = _int_(cur["bank"])
+        new_ships = len(cur["own"] - self._rollup_prev["own"])
+        new_tech = sorted(cur["tech"] - self._rollup_prev["tech"])
+        kills = self.kills_since_pulse
+        self.kills_since_pulse = 0
+        delta = "%s%s" % ("+" if (bank0 is not None and bank1 is not None
+                                  and bank1 >= bank0) else "",
+                          (bank1 - bank0) if bank0 is not None
+                          and bank1 is not None else "?")
+        lines = ["since last pulse: bank %s→%s (%s); builds materialized: "
+                 "+%d; research accepted: %s; kills (enemy lost): +%d"
+                 % (bank0 if bank0 is not None else "?",
+                    bank1 if bank1 is not None else "?", delta,
+                    new_ships, new_tech or "none", kills)]
+        self._rollup_prev = cur
+        return lines
 
     # -- scheduling (game time only, FR-003/FR-007) --------------------
     def due(self, tick, paused=False):
@@ -188,7 +387,8 @@ class PulseLoop:
         if self.recorder:
             self.recorder.record("usage", tick=tick, channel="s2_in",
                                  total=in_meta["units"], alerts=in_meta
-                                 ["alerts"], pruned=in_meta["pruned"])
+                                 ["alerts"], pruned=in_meta["pruned"],
+                                 sections=in_meta.get("sections") or {})
         self._result = None
         self._pulse_count += 1
         self._worker = threading.Thread(
@@ -208,7 +408,7 @@ class PulseLoop:
         self._worker = None
         return self._result
 
-    # -- input (FR-009 layout, budget FR-013) -----------------------------
+    # -- input (FR-009 SUPERSET layout, budget FR-013) ---------------------
     def pulse_input(self, tick):
         view = self.ledger.as_dict() if self.ledger is not None else {}
         charter = self.charter_lines or [
@@ -226,20 +426,35 @@ class PulseLoop:
             prev_lines = [json.dumps(prev.raw, sort_keys=True,
                                      separators=(",", ":"))]
             status_lines = [
-                "%s %s cmds=%s tick=%s aux=%s" % (
+                "%s %s cmds=%s tick=%s aux=%s%s" % (
                     s["item_id"], s["resolution"], s["command_ids"],
-                    s["issued_tick"], s["aux"])
+                    s["issued_tick"], s["aux"],
+                    (" | verdict: " + s["verdict"]) if s.get("verdict")
+                    else "")
                 for s in (self.executor.statuses() if self.executor
                           else [])]
+        base = own_base_pos(view, self.own_player)
+        verdict_lines = []
+        if self.executor is not None:
+            verdict_lines = ["[%s] %s: %s" % (v.get("kind"), v["subject"],
+                                              v["text"])
+                             for v in self.executor.verdicts()]
         text, meta = build_pulse_input(
             charter_lines=charter,
             p0_items=list(self._p0_items() or []),
             ledger_lines=self._ledger_echo(view),
-            rollup_lines=[],
+            rollup_lines=self._mechanical_rollups(view),
             prev_program_lines=prev_lines,
             prev_status_lines=status_lines,
             micro_lines=[], reflex_lines=[],
-            budget_units=self.s2_in)
+            budget_units=self.s2_in,
+            arc_lines=[self._arc_line(view)],
+            enemy_lines=enemy_lines(view, self.own_player, base),
+            asteroid_lines=asteroid_lines(view, self.own_player, base,
+                                          self.asteroid_top_n),
+            build_menu_lines=build_menu_lines(view),
+            research_menu_lines=research_menu_lines(view),
+            verdict_lines=verdict_lines)
         msgs = [{"role": "system", "content": text},
                 {"role": "user", "content": "tick %d: emit the JSON "
                  "program packet." % tick}]
@@ -259,20 +474,14 @@ class PulseLoop:
             pos = s.get("pos") or [0, 0, 0]
             lines.append("ship %s %s pos[%.0f,%.0f,%.0f] order=%s cargo=%s"
                          % (sid, s.get("type") or "?",
-                            pos[0] if len(pos) > 0 else 0,
-                            pos[1] if len(pos) > 1 else 0,
-                            pos[2] if len(pos) > 2 else 0,
-                            verb or "-", s.get("cargo", "-")))
+                             pos[0] if len(pos) > 0 else 0,
+                             pos[1] if len(pos) > 1 else 0,
+                             pos[2] if len(pos) > 2 else 0,
+                             verb or "-", s.get("cargo", "-")))
         if view.get("bank") is not None:
             lines.append("bank %s" % (view["bank"],))
-        lines.append("resources %d" % len(view.get("resources") or {}))
-        # techTree: without it S2 cannot pick the next tech (it guesses)
-        tt = view.get("techTree") or {}
-        if tt:
-            lines.append("techTree.researched: %s"
-                         % (tt.get("researched") or []))
-            if tt.get("canResearch") is not None:
-                lines.append("techTree.canResearch: %s" % tt.get("canResearch"))
+        # enemies/asteroids/menus render as their own SUPERSET sections
+        # (FR-009); the ledger stays per-own-ship + bank.
         return lines or ["(no ships observed)"]
 
     def _p0_items(self):
@@ -440,6 +649,10 @@ class S1MicroLoop:
         self._result = None
         self._tools = _s1_tools()
         self._llm_error_cls = LLMError
+        # FR-022: rolling micro-history (S2-allocated window); entries are
+        # {"tick","seq","applied","blocked","note"} — truncated to the
+        # CURRENT program's s1_context at every micro_input().
+        self._history = []
 
     def due(self, tick, paused=False):
         if paused:
@@ -493,10 +706,15 @@ class S1MicroLoop:
         if prog is None or not prog.delegate:
             grants = ("NO ACTIVE LICENSE — advisory-only, reply with no "
                       "tool calls: %s" % grants)
-        status_lines = ["%s %s cmds=%s" % (s["item_id"], s["resolution"],
-                                           s["command_ids"])
-                        for s in (self.executor.statuses() or [])
-                        if s["item_id"].startswith("s1:")]
+        status_lines = ["%s %s cmds=%s%s" % (
+            s["item_id"], s["resolution"], s["command_ids"],
+            (" | verdict: " + s["verdict"]) if s.get("verdict") else "")
+            for s in (self.executor.statuses() or [])
+            if s["item_id"].startswith("s1:")]
+        verdict_lines = ["[%s] %s: %s" % (v.get("kind"), v["subject"],
+                                          v["text"])
+                         for v in self.executor.verdicts()]
+        history_lines = self._history_lines(prog, tick)
         text, meta = build_micro_input(
             charter_lines=charter,
             p0_items=[],
@@ -504,11 +722,37 @@ class S1MicroLoop:
             live_lines=self._live_view(view, prog),
             prev_micro_lines=[],
             prev_status_lines=status_lines,
-            budget_units=self.s1_in)
+            budget_units=self.s1_in,
+            verdict_lines=verdict_lines,
+            history_lines=history_lines)
         msgs = [{"role": "system", "content": text},
                 {"role": "user", "content": "tick %d: react or stay "
                  "silent." % tick}]
         return msgs, meta
+
+    def _history_lines(self, prog, tick):
+        """The S1 rolling history window: at most s1_context.max_exchanges
+        entries spanning s1_context.ticks (mechanical truncation, FR-022).
+        Absent s1_context ⇒ stateless (empty lines)."""
+        ctx = (prog.s1_context if prog is not None else None) or None
+        if not ctx:
+            self._history = []
+            return []
+        max_exc = ctx.get("max_exchanges")
+        ticks_span = ctx.get("ticks")
+        keep = []
+        for h in reversed(self._history):
+            if max_exc is not None and len(keep) >= max_exc:
+                break
+            if ticks_span is not None and tick - h["tick"] > ticks_span:
+                continue
+            keep.append(h)
+        keep.reverse()
+        self._history = keep          # oldest-first, ready for append
+        return ["seq=%s tick=%s applied=%d blocked=%d %s"
+                % (h["seq"], h["tick"], h["applied"], h["blocked"],
+                   h.get("note") or "")
+                for h in self._history]
 
     def _grant_status(self, prog, tick):
         """License state made explicit: expired grants must reach BOTH
@@ -606,18 +850,42 @@ class S1MicroLoop:
                  (prog.version if prog is not None else 0),
                  "tasking": items}, prog, last_seq=self.last_seq, tick=tick)
             self.last_seq = self.seq
+            # FR-020: envelope blocks TEACH — verdict names the licensed
+            # verbs/ships instead of dropping by silence.
+            for iid, reason in blocked:
+                allowed = self._allowed_for(prog)
+                self.executor.add_verdict(
+                    "deny", "s1:%s" % iid, "%s; allowed: %s"
+                    % (reason, allowed), tick)
+            if applied:
+                pass   # executor queues in-envelope items (driver on_tick)
+            self._history.append({
+                "tick": tick, "seq": self.seq, "applied": len(applied),
+                "blocked": len(blocked),
+                "note": "program_version=%s" % (
+                    prog.version if prog is not None else 0)})
+            self._trim_history(prog, tick)
             self._result = {"ok": True, "applied": applied,
                             "blocked": blocked, "seq": self.seq,
                             "tick": tick}
             if self.recorder:
                 self.recorder.record("micro", tick=tick, event="applied",
                                      seq=self.seq, n=len(applied),
+                                     blocked=len(blocked),
                                      program_version=(prog.version if
                                                       prog else None))
             return self._result
         except ProgramError as e:
             self._result = {"ok": False, "error": e.reason,
                             "seq": self.seq, "tick": tick}
+            self.executor.add_verdict(
+                "deny", "s1:packet",
+                "micro-packet rejected: %s; reply with tasking tool calls "
+                "with ships arrays from the LIVE VIEW" % e.reason, tick)
+            self._history.append({
+                "tick": tick, "seq": self.seq, "applied": 0, "blocked": 0,
+                "note": "rejected: %s" % e.reason})
+            self._trim_history(prog, tick)
             if self.recorder:
                 self.recorder.record("micro", tick=tick, event="rejected",
                                      seq=self.seq, reason=e.reason,
@@ -625,19 +893,67 @@ class S1MicroLoop:
                                                       prog else None))
             return self._result
 
-    def _items_from_calls(self, calls, prog):
+    def _allowed_for(self, prog):
+        """The active license in one legible phrase (FR-020): grant verbs
+        + the mechanically-resolved scope ship ids."""
+        if prog is None or not prog.delegate:
+            return "no active license — advisory-only"
+        out = []
+        for g in prog.delegate:
+            ships = g["ships"]
+            if isinstance(ships, str):
+                resolved = self.executor._scope_ships(ships, 0) \
+                    if self.executor is not None else []
+                ships = "%s (%s)" % (ships, resolved or "none resolved")
+            out.append("grant %s: verbs %s on ships %s"
+                       % (g["grant_id"], g["verbs"], ships))
+        return "; ".join(out)
+
+    def _trim_history(self, prog, tick):
+        ctx = (prog.s1_context if prog is not None else None)
+        max_exc = ctx.get("max_exchanges") if ctx else 0
+        if max_exc:
+            self._history = self._history[-max_exc:]
+        else:
+            self._history = []
+
+    def _items_from_calls(self, calls, prog, tick=None):
         items = []
         for i, c in enumerate(calls or []):
             verb = c.get("verb")
             if verb not in S1_TASKING_VERBS:
-                continue                  # non-tasking tools never passed
+                # FR-020: attempted production tools TEACH too — they are
+                # S2's decision, never silently swallowed
+                import twincore.program as _P
+                if verb in _P.PRODUCTION_VERBS:
+                    self.executor.add_verdict(
+                        "deny", "s1:m%d" % (i + 1),
+                        "%r is a PRODUCTION verb — build/research are the "
+                        "strategist's decisions (S2); S1 issue tasking "
+                        "verbs only (see # ENVELOPE grants)" % verb,
+                        tick)
+                continue
             params = dict(c.get("params") or {})
+            if not params:
+                # FR-020: param-less calls (Qwen guard-spam) TEACH too
+                self.executor.add_verdict(
+                    "deny", "s1:params",
+                    "call %r with NO params dropped — pass ships as an "
+                    "ARRAY of ship ids from the LIVE VIEW, or reply with "
+                    "no tool calls" % verb, tick)
+                continue
             item = {"id": "m%d" % (i + 1), "verb": verb}
             gid = self._licensing_grant(verb, prog)
             if gid:
                 item["grant"] = gid
-            ships = params.get("ships")
-            ships = _coerce_ship_ids(ships)
+            ships_raw = params.get("ships")
+            ships = _coerce_ship_ids(ships_raw)
+            if ships_raw is not None and not isinstance(ships_raw, list) \
+                    and ships:
+                self.executor.add_verdict(
+                    "coerce", "s1:m%d" % (i + 1),
+                    "ships %s coerced to array %s (always pass an array "
+                    "of ship ids)" % (ships_raw, ships), tick)
             if ships:
                 item["ships"] = ships
             for k in ("target", "tactics"):
@@ -687,7 +1003,7 @@ class V4Driver:
                  s2_out=DEFAULT_S2_OUT, max_repairs=DEFAULT_MAX_REPAIRS,
                  charter_lines=None, own_player=0, s1_channel=None,
                  micro_pulse_ticks=128, s1_in=4096,
-                 s1_charter_lines=None):
+                 s1_charter_lines=None, arc_chars=600, asteroid_top_n=32):
         self.client = client if client is not None else Client(
             mcp_url="http://127.0.0.1:8302/mcp")
         self.channel = channel
@@ -704,7 +1020,8 @@ class V4Driver:
                               s2_in=s2_in, s2_out=s2_out,
                               max_repairs=max_repairs,
                               charter_lines=charter_lines,
-                              own_player=own_player)
+                              own_player=own_player, arc_chars=arc_chars,
+                              asteroid_top_n=asteroid_top_n)
         self.s1_loop = None
         if s1_channel is not None:
             self.s1_loop = S1MicroLoop(
@@ -713,6 +1030,10 @@ class V4Driver:
                 micro_pulse_ticks=micro_pulse_ticks, s1_in=s1_in,
                 charter_lines=s1_charter_lines, own_player=own_player)
         self.model_state = "online"
+        # engine-event consumer (FR-023): dedupe ring (the engine event
+        # log re-delivers history; session-004 lesson), applied/denied
+        # mapping, kill counting for mechanical rollups.
+        self._events_seen = set()
 
     def s1_state(self):
         return "online" if self.s1_loop else "off"
@@ -733,6 +1054,9 @@ class V4Driver:
         boundary → run the executor → schedule the next pulse."""
         if paused:
             return []
+        evs = self._poll_events()
+        if evs is not None:
+            self.consume_events(evs, tick=tick)
         # small grace join: collect a worker that finished between ticks
         # (50 ms cap — material lag keeps the tick loop unblocked, FR-007)
         done = self.loop.harvest(timeout=0.05)
@@ -764,6 +1088,11 @@ class V4Driver:
     def _apply_program(self, program, tick):
         prev = self.executor.program
         self.executor.set_program(program, tick)
+        clamped = self.loop.set_arc(program.arc, tick)
+        if clamped and self.recorder:
+            self.executor.add_verdict(
+                "clamp", "arc", "arc over %d chars — trimmed; keep the "
+                "running story tighter" % self.loop.arc_chars)
         if self.recorder:
             self.recorder.record(
                 "program", tick=tick, event="applied",
@@ -772,7 +1101,9 @@ class V4Driver:
                 items=[i["id"] for i in
                        program.production + program.tasking],
                 has_envelope=program.has_envelope(),
-                posture=program.posture)
+                posture=program.posture,
+                arc=bool(program.arc),
+                s1_context=program.s1_context)
 
     def _transition(self, to_state, reason):
         prev = self.model_state
@@ -781,6 +1112,48 @@ class V4Driver:
             self.recorder.record("degradation", tick=None,
                                  **{"from": prev, "to": to_state,
                                     "reason": reason})
+
+    # -- events (FR-023: issued ≠ accepted) ----------------------------------
+    def consume_events(self, events, tick=None):
+        """Fold engine events into statuses/verdicts/rollups. Dedupe key:
+        (tick, type, id, aux, owner) — the ring re-delivers history."""
+        n = 0
+        for ev in events or []:
+            key = (ev.get("tick"), ev.get("type"), ev.get("id"),
+                   ev.get("aux"), ev.get("owner"))
+            if key in self._events_seen:
+                continue
+            self._events_seen.add(key)
+            if len(self._events_seen) > 2048:
+                self._events_seen = set(sorted(self._events_seen,
+                                               key=repr)[-1024:])
+            etype = ev.get("type")
+            if etype == "shipDestroyed":
+                try:
+                    killer = int(ev.get("aux", 0)) - 1
+                    victim = int(ev.get("owner", self.own_player))
+                except (TypeError, ValueError):
+                    continue
+                if killer == self.own_player and victim != self.own_player:
+                    self.loop.kills_since_pulse += 1
+                elif victim == self.own_player:
+                    pass   # P0 wake wiring owns own-losses (T014 hooks)
+                continue
+            if etype in ("orderRejected", "orderApplied"):
+                if self.executor.on_engine_event(ev, tick=tick):
+                    n += 1
+        return n
+
+    def _poll_events(self):
+        """Poll the engine event ring (observability-safe; never breaks
+        the tick loop)."""
+        if self.client is None or not hasattr(self.client, "get_events"):
+            return None
+        try:
+            res = self.client.get_events()
+            return (res or {}).get("events") or []
+        except Exception:
+            return None
 
     # -- lifecycle -------------------------------------------------------------
     def pause(self):
@@ -893,7 +1266,9 @@ def driver_from_config(config, recorder=None, client=None, channel=None):
     executor = Executor(client=client, ledger=ledger, recorder=recorder,
                         validator=validator, own_player=seat,
                         max_per_tick=int(v4.get("max_commands_per_tick", 6)),
-                        reflexes=reflexes)
+                        reflexes=reflexes,
+                        verdict_budget=int(v4.get("verdict_chars", 200)),
+                        verdict_feed_k=int(v4.get("verdict_feed_k", 6)))
     drv = V4Driver(client=client, channel=channel, recorder=recorder,
                    ledger=ledger, executor=executor, validator=validator,
                    pulse_ticks=pulse_ticks,
@@ -901,7 +1276,9 @@ def driver_from_config(config, recorder=None, client=None, channel=None):
                    s2_out=int(budgets.get("s2_out", DEFAULT_S2_OUT)),
                    max_repairs=int(v4.get("max_repair_attempts",
                                           DEFAULT_MAX_REPAIRS)),
-                   own_player=seat)
+                   own_player=seat,
+                   arc_chars=int(v4.get("arc_chars", 600)),
+                   asteroid_top_n=int(v4.get("asteroid_top_n", 32)))
     if bool((_cfgget(config, "v4.s1_channel.enabled", True))):
         url1 = _cfgget(config, "channels.s1.url") or ""
         if url1:

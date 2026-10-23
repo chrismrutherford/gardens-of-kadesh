@@ -51,9 +51,10 @@ def v4_micro(seq=1, program_version=1, **over):
 
 
 def v4_ledger(own=0, idle_collectors=0, full_collectors=0, asteroids=1,
-              builders=1, bank=5000.0):
-    """A tiny deterministic state-view for executor tests (refined per
-    spec-003 snapshot shape in later increments)."""
+              builders=1, bank=5000.0, enemies=0, tech_tree=None,
+              build_queue=None):
+    """A tiny deterministic state-view for executor tests (Draft v3:
+    optional enemy ships + techTree + buildQueue for superset tests)."""
     ships, rid = [], 100
     for _ in range(idle_collectors):
         ships.append({"id": rid, "type": "ResourceCollector",
@@ -65,14 +66,20 @@ def v4_ledger(own=0, idle_collectors=0, full_collectors=0, asteroids=1,
                       "owner": own, "pos": [10.0, 0.0, 0.0],
                       "order": "harvest", "cargo": 100, "cargo_max": 100})
         rid += 1
+    for i in range(enemies):
+        ships.append({"id": 10 + i, "type": "LightInterceptor",
+                      "owner": (own + 1) % 2, "pos": [-50.0, 0.0, 0.0],
+                      "order": None})
     roids = []
     aid = 500
     for i in range(asteroids):
         roids.append({"id": aid + i, "pos": [float(100 * i), 0.0, 0.0],
-                      "ru": 5000.0})
+                      "ru": 5000.0, "value": 5000.0})
     led = {"own_player": own, "ships": ships, "asteroids": roids,
            "bank": bank}
     led["builders"] = builders
+    led["techTree"] = tech_tree
+    led["buildQueue"] = build_queue or []
     return led
 
 
@@ -91,6 +98,9 @@ class FakeLedger:
         self._state = {"ships_all": self._ships_all,
                        "resources": self._resources,
                        "bank": led.get("bank", 5000.0)}
+        if led.get("techTree") is not None:
+            self._state["techTree"] = led["techTree"]
+        self._state["buildQueue"] = list(led.get("buildQueue") or [])
         self._pending = {}
 
     def as_dict(self):
@@ -98,6 +108,9 @@ class FakeLedger:
 
     def in_flight(self):
         return dict(self._pending)
+
+    def mark_command_done(self, oid):
+        self._pending.pop(oid, None)
 
     def is_allied(self, player):
         return False

@@ -188,3 +188,85 @@ class TestS1Micro(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestDraftV3S1(unittest.TestCase):
+    """Decision 19 at the tactical tier: verdicts teach (FR-020), the
+    s1_context history window truncates mechanically (FR-022)."""
+
+    def _loop(self, prog, script=None):
+        import twincore.executor as E
+        import twincore.v4driver as VD
+        led = CF.FakeLedger(CF.v4_ledger(idle_collectors=1,
+                                         full_collectors=1, asteroids=2,
+                                         builders=1))
+        ex = E.Executor(client=CF.FakeClient(), ledger=led,
+                        recorder=MemRecorder(),
+                        reflexes={"harvest": False, "deliver": False})
+        if prog is not None:
+            ex.set_program(prog, tick=1)
+        loop = VD.S1MicroLoop(channel=FakeS1Channel(script),
+                              executor=ex, recorder=ex.recorder,
+                              ledger=led, micro_pulse_ticks=4)
+        return loop, ex
+
+    def _prog(self, **over):
+        pkg = CF.v4_packet(7)
+        pkg.update(over)
+        return P.validate_packet(copy.deepcopy(pkg), 0)
+
+    def test_param_less_call_denied_with_verdict(self):
+        loop, ex = self._loop(
+            self._prog(),
+            script=[[{"verb": "order_guard", "params": {}}]])
+        loop._call(list(loop.micro_input(1)[0]), 1)
+        texts = [v["text"] for v in ex.verdicts()]
+        self.assertTrue(any("NO params dropped" in t for t in texts))
+        self.assertEqual(ex._micro_queue, [])
+
+    def test_scalar_ships_coerced_with_verdict(self):
+        loop, ex = self._loop(
+            self._prog(),
+            script=[[{"verb": "order_guard",
+                      "params": {"ships": "100"}}]])
+        loop._call(list(loop.micro_input(1)[0]), 1)
+        vs = [v for v in ex.verdicts() if v["kind"] == "coerce"]
+        self.assertTrue(vs)
+        self.assertIn("coerced to array [100]", vs[0]["text"])
+        # coercion is legible, the item still applies in-envelope
+        res = loop._result
+        self.assertEqual([it["id"] for it in res["applied"]], ["m1"])
+
+    def test_out_of_envelope_blocked_teaches_allowed(self):
+        loop, ex = self._loop(
+            self._prog(),      # d1 grants order_attack/guard on scope:defense
+            script=[[{"verb": "order_build",
+                      "params": {"type": "ResourceCollector",
+                                 "ships": [100], "grant": "d1"}}]])
+        loop._call(list(loop.micro_input(1)[0]), 1)
+        texts = [v["text"] for v in ex.verdicts() if v["kind"] == "deny"]
+        self.assertTrue(any("PRODUCTION verb" in t for t in texts))
+
+    def test_history_window_stored_rendered_truncated(self):
+        prog = self._prog(s1_context={"max_exchanges": 2, "ticks": 6000})
+        loop, ex = self._loop(prog, script=[[], []])
+        loop._call(list(loop.micro_input(1)[0]), 1)
+        loop._call(list(loop.micro_input(17)[0]), 17)
+        loop._call(list(loop.micro_input(33)[0]), 33)
+        self.assertEqual(len(loop._history), 2)      # max_exchanges=2
+        self.assertEqual(loop._history[0]["seq"], 2)  # oldest evicted
+        lines = loop._history_lines(prog, 40)
+        self.assertIn("seq=2 tick=17", lines[0])
+        msgs, meta = loop.micro_input(40)
+        content = msgs[0]["content"]
+        self.assertIn("# MICRO HISTORY", content)
+        self.assertIn("seq=3 tick=33", content)
+        self.assertNotIn("seq=1 tick=1", content)
+
+    def test_no_s1_context_stateless(self):
+        loop, ex = self._loop(self._prog(), script=[[{"verb": "order_guard",
+                                                   "params": {
+                                                       "ships": [253]}}]])
+        loop._call(list(loop.micro_input(1)[0]), 1)
+        self.assertEqual(loop._history, [])
+        text, meta = loop.micro_input(2)
+        self.assertNotIn("# MICRO HISTORY", text)

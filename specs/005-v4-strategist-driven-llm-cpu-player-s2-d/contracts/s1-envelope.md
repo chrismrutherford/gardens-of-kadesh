@@ -63,9 +63,20 @@ Validation (FR-018), whole-packet at the tick boundary:
   moves/engagements within grant.zone (when present);
 - allied targets rejected (carried);
 - production verbs without explicit grant → items blocked.
-Valid remainder applies; blocked items are recorded with reasons and fed
-to S1's next micro-input. ≤1 bounded repair per micro-pulse; second
-failure aborts the micro-pulse (S2's program stands).
+Valid remainder applies; blocked items are recorded with reasons AND
+verdict text (naming the licensed verbs/ships instead) and fed to S1's
+next micro-input — the verdict section is how S1 learns the live
+rulebook (FR-020): recent denials/coercions render under
+`# EXECUTOR VERDICTS` with their allowed alternatives. ≤1 bounded repair
+per micro-pulse; second failure aborts the micro-pulse (S2's program
+stands).
+
+S1's rolling history (FR-022): the micro-input also carries up to
+`s1_context.max_exchanges` previous micro-packets (with their
+MicroStatus) from within `s1_context.ticks` — the window the CURRENT
+program allocated, truncated mechanically, FIRST pruned under the
+micro-budget breach. No `s1_context` in the program ⇒ S1 stays
+stateless per pulse.
 
 ## 3. Priority law on shared ships (executor enforcement)
 

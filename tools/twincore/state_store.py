@@ -69,6 +69,7 @@ class Ledger:
             "directive_version": 0,
             "last_rejections": [],
             "techTree": {},           # labs/canResearch/researched/locked
+            "buildQueue": [],         # per-builder queue (FR-009 build menu)
             "buildQueue": [],         # in-progress builds (type/quantity)
             "research": [],           # techs in flight
         }
@@ -111,6 +112,8 @@ class Ledger:
         # engine meta: research tree + build queue (economy/research lanes)
         if snapshot.get("techTree") is not None:
             self._s["techTree"] = copy.deepcopy(snapshot["techTree"])
+        if snapshot.get("buildQueue") is not None:
+            self._s["buildQueue"] = copy.deepcopy(snapshot["buildQueue"])
         if snapshot.get("buildQueue") is not None:
             self._s["buildQueue"] = list(
                 snapshot.get("buildQueue") or [])
@@ -197,6 +200,12 @@ class Ledger:
 
     def in_flight(self):
         return dict(self._s["pending"])
+
+    def mark_command_done(self, oid):
+        """A wire command left the pending set: either the engine ACKED it
+        (orderApplied/correction event) or its effect demonstrably lapsed
+        (stale harvest oid dropped by the continuous reflex, FR-006)."""
+        self._s["pending"].pop(oid, None)
 
     def last_rejections(self):
         return copy.deepcopy(self._s["last_rejections"])

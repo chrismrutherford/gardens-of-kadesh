@@ -79,6 +79,11 @@ DEFAULTS = {
         "s1_channel": {"enabled": True},  # off ⇒ program + reflexes only
         "budgets": {"s2_in": 12288, "s2_out": 3072, "s1_in": 4096,
                     "s1_out": 900},
+        # Draft v3 (decision 19): teaching firewall + arc + superset view
+        "arc_chars": 600,          # FR-021: S2 arc budget (length-clamped)
+        "verdict_chars": 200,      # FR-020: one verdict line budget
+        "asteroid_top_n": 32,      # FR-009: asteroid ledger rows (nearest)
+        "verdict_feed_k": 6,       # last K verdicts rendered to S1
     },
     "strategist": {"enabled": False},
     "difficulty": DEFAULT_DIFFICULTY,
@@ -245,6 +250,14 @@ class Config:
                 raise ConfigError("v4.reflexes.%s must be a bool" % k)
         if not isinstance(v4["s1_channel"]["enabled"], bool):
             raise ConfigError("v4.s1_channel.enabled must be a bool")
+        # Draft v3 knobs (FR-020/FR-021/FR-009)
+        for k in ("arc_chars", "verdict_chars", "asteroid_top_n",
+                  "verdict_feed_k"):
+            v = v4[k]
+            if not isinstance(v, int) or isinstance(v, bool) or v <= 0:
+                raise ConfigError("v4.%s must be an int > 0" % k)
+        if not v4["asteroid_top_n"] <= 256:
+            raise ConfigError("v4.asteroid_top_n must be ≤ 256")
 
     DEFAULTS = DEFAULTS
 

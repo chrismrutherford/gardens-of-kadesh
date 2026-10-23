@@ -37,13 +37,19 @@ are NOT reachable from `v4driver` (FR-014).
    tail -n 40 $(python -m tools.twincore.tail --last-match -k program -k packet)
    ```
    Expect: `program` row (version bump ≥1) citing items covering
-   production + research + ≥1 fleet tasking; subsequent command rows cite
+   production + research + ≥1 fleet tasking; packet cites tech/hull names
+   that exist in the engine ledger (a guessed name must return as
+   `engine_denied` + verdict, NOT repeat); subsequent command rows cite
    `{program_version, item_id}` (SC-002 traceability).
 4. Watch reflex + micro activity between S2 pulses: `micro` rows carry
    `{program_version, seq, grant_id, decision_id}` citations and must be
-   in-envelope (violations only as blocked rows); `reflex_harvest`/
-   `reflex_deliver` rows only for collectors covered by neither program
-   nor S1 (FR-006/FR-018).
+   in-envelope (violations only as blocked rows WITH verdict text naming
+   the licensed verbs/ships); `reflex_harvest`/`reflex_deliver` rows only
+   for collectors covered by neither program nor S1 — and parade/idle
+   collectors get re-dispatched EVERY tick (an RC may not sit idle; FR-006);
+   the S2 pulse input (V4_DEBUG_IO dump) shows the superset sections
+   (`# ARC`, ENEMY CONTACTS, asteroid ledger, build menu, research menu)
+   and per-item statuses incl. `engine_denied` aux codes (FR-009/020/023).
 5. Degrade deliberately: stop the S1 endpoint — program + reflexes
    continue, S1 duties NOT absorbed by code. Restore. Then stop the S2
    endpoint — last program + S1 (in its existing envelope) + reflexes
@@ -63,5 +69,8 @@ python -m tools.twincore.harness --spec 005 --series 3 --difficulty beginner
 Report (same shape as v3) adds: program-adherence (commands per program
 item), S1-adherence (micro-commands per grant) + envelope violation and
 override counts, revision counts, pulse-cadence adherence (both
-channels), validator rejection rates, reflex activity — all computed from
-the postgres trail (SC-005, SC-007 replayable).
+channels), validator rejection rates, reflex activity, and the Draft v3
+measures — deny rate per channel, repeated-identical-denial rate, verdict
+legibility (≥1 allowed alternative per verdict), arc freshness (arc
+byte-age from last S2 rewrite), reflex idle-RC re-dispatch latency — all
+computed from the postgres trail (SC-005, SC-006, SC-007 replayable).

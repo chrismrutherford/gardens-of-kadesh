@@ -191,8 +191,13 @@ class TestRejections(ExecutorBase):
                          "params": {"tech": "MassDrive1Kt"}}], tasking=[]),
             tick=1)
         issued = ex.on_tick(1)
-        self.assertEqual(issued[0]["resolution"], "rejected")
+        # FR-023 Draft v3: issued ≠ accepted — the engine wire error marks
+        # engine_denied (retryable; NOT suppressed) + a legible verdict
+        self.assertEqual(issued[0]["resolution"], "engine_denied")
         self.assertEqual(issued[0]["aux"], 5)
+        self.assertIn("E_NO_LABS", issued[0].get("verdict", "") or
+                      ex.item_status("pr")["verdict"])
+        self.assertTrue(ex.verdicts())   # verdict ring recorded
         ex.on_tick(2)
         self.assertEqual(self.wire_tools(client).count("order_research"), 2)
 
@@ -310,3 +315,179 @@ class TestRowsAndNoDoctrine(ExecutorBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestDraftV3Executor(unittest.TestCase):
+    """Decision 19 at the executor: teaching firewall (FR-020), semantic
+    name denies, engine-event consumer (FR-023), clamp verdicts."""
+
+    def setUp(self):
+        import twincore.executor as E
+        import twincore.program as Pm
+        self.E = E
+        self.P = Pm
+
+    def make_prog(self, **over):
+        packet = CF.v4_packet(7, **over)
+        return self.P.validate_packet(packet, 0)
+
+    def _ex(self, client=None, ledger=None, **kw):
+        return make_executor(self.E.Executor, client=client or CF.FakeClient(),
+                             ledger=ledger or CF.FakeLedger(
+                                 CF.v4_ledger(builders=1)), **kw)
+
+    def make_prog(self, **over):
+        pkg = {"version": 7, "production": over.get("production", []),
+               "tasking": over.get("tasking", [])}
+        return P.validate_packet(copy.deepcopy(pkg), 0)
+
+    # -- verdict store ----------------------------------------------------
+    def test_verdict_repeat_marker(self):
+        ex = self._ex()
+        ex.add_verdict("deny", "t1", "ships outside ledger", 1)
+        ex.add_verdict("deny", "t1", "ships outside ledger", 2)
+        v = ex.verdicts()[0]
+        self.assertEqual(v["n"], 2)
+        self.assertIn("# repeat 2", v["text"])
+        # a different text on the same subject is a NEW row... no: same
+        # subject+kind dedupes only on identical text
+        ex.add_verdict("deny", "t1", "different refusal", 3)
+        self.assertEqual(len(ex.verdicts()), 2)
+
+    def test_verdict_ring_capped(self):
+        ex = self._ex()
+        for i in range(40):
+            ex.add_verdict("deny", "s%d" % i, "case %d" % i, 1)
+        self.assertLessEqual(len(ex.verdicts(limit=100)), 24)
+        self.assertEqual(len(ex.verdicts()), 6)   # feed_k default 6
+
+    # -- semantic name denies (FR-020 pre-wire) ----------------------------
+    def techtree(self):
+        return {
+            "labs": 1, "canResearch": False,
+            "researched": ["MassDrive1Kt"],
+            "locked": [
+                {"type": "IonCannonFrigate", "disabled": False,
+                 "missing": ["IonWeapons", "MassDrive100Kt"]},
+                {"type": "HeavyCorvette", "disabled": False,
+                 "missing": ["Chassis1", "MassDrive10Kt"]},
+            ]}
+
+    def test_unknown_tech_denied_with_alternatives(self):
+        led = CF.FakeLedger(CF.v4_ledger(builders=1, tech_tree=self.techtree()))
+        client = CF.FakeClient()
+        ex = self._ex(client=client, ledger=led)
+        ex.set_program(self.make_prog(
+            production=[{"id": "p2", "verb": "order_research",
+                         "params": {"tech": "MassDrive2Kt"}}]), tick=1)
+        issued = ex.on_tick(1)
+        self.assertEqual(issued, [])             # never reached the wire
+        st = ex.item_status("p2")
+        self.assertEqual(st["resolution"], "blocked")
+        self.assertIn("unknown", st["verdict"])
+        self.assertIn("IonWeapons", st["verdict"])   # a legal alternative
+        vs = [v["text"] for v in ex.verdicts()]
+        self.assertTrue(any("MassDrive2Kt" in t for t in vs))
+        self.assertEqual(client.issued, [])      # zero engine calls
+
+    def test_already_researched_denied(self):
+        led = CF.FakeLedger(CF.v4_ledger(builders=1, tech_tree=self.techtree()))
+        ex = self._ex(ledger=led)
+        ex.set_program(self.make_prog(
+            production=[{"id": "p1", "verb": "order_research",
+                         "params": {"tech": "MassDrive1Kt"}}]), tick=1)
+        ex.on_tick(1)
+        st = ex.item_status("p1")
+        self.assertEqual(st["resolution"], "blocked")
+        self.assertIn("already researched", st["verdict"])
+
+    def test_legal_tech_issues(self):
+        led = CF.FakeLedger(CF.v4_ledger(builders=1, tech_tree=self.techtree()))
+        client = CF.FakeClient()
+        ex = self._ex(client=client, ledger=led)
+        ex.set_program(self.make_prog(
+            production=[{"id": "p1", "verb": "order_research",
+                         "params": {"tech": "IonWeapons"}, "once": True}]),
+            tick=1)
+        issued = ex.on_tick(1)
+        self.assertEqual(issued[0]["resolution"], "applied")
+        self.assertEqual(len(client.issued), 1)
+
+    def test_locked_hull_denied_with_needs(self):
+        led = CF.FakeLedger(CF.v4_ledger(builders=1, tech_tree=self.techtree()))
+        ex = self._ex(ledger=led)
+        ex.set_program(self.make_prog(
+            production=[{"id": "p1", "verb": "order_build",
+                         "params": {"type": "IonCannonFrigate"}}]), tick=1)
+        ex.on_tick(1)
+        st = ex.item_status("p1")
+        self.assertEqual(st["resolution"], "blocked")
+        self.assertIn("LOCKED", st["verdict"])
+        self.assertIn("IonWeapons", st["verdict"])
+
+    def test_no_techtree_enforces_nothing(self):
+        led = CF.FakeLedger(CF.v4_ledger(builders=1))   # no techTree
+        client = CF.FakeClient()
+        ex = self._ex(client=client, ledger=led)
+        ex.set_program(self.make_prog(
+            production=[{"id": "p1", "verb": "order_research",
+                         "params": {"tech": "WhoKnows"}, "once": True}]),
+            tick=1)
+        issued = ex.on_tick(1)
+        self.assertEqual(issued[0]["resolution"], "applied")
+
+    # -- engine-event consumer (FR-023) -------------------------------------
+    def test_order_rejected_marks_engine_denied_and_verdict(self):
+        # wire ACCEPTS at issue time; the engine rejects it ASYNC later —
+        # the event consumer must turn issued into engine_denied (FR-023)
+        client = CF.FakeClient()
+        led = CF.FakeLedger(CF.v4_ledger(builders=1))
+        ex = self._ex(client=client, ledger=led)
+        ex.set_program(self.make_prog(
+            production=[{"id": "pr", "verb": "order_research",
+                         "params": {"tech": "MassDrive1Kt"},
+                         "once": True}]), tick=1)
+        issued = ex.on_tick(1)     # wire ok; engine will reject async
+        oid = issued[0]["command_id"]
+        self.assertEqual(issued[0]["resolution"], "applied")  # issued ≠ accepted
+        self.assertIn(oid, ex.ledger.in_flight())
+        consumed = ex.on_engine_event({"type": "orderRejected", "id": oid,
+                                       "aux": 8}, tick=2)
+        self.assertTrue(consumed)
+        st = ex.item_status("pr")
+        self.assertEqual(st["resolution"], "engine_denied")
+        self.assertEqual(st["aux"], 8)
+        self.assertIn("E_BAD_REQUEST", st["verdict"])
+        self.assertNotIn(oid, ex.ledger.in_flight())   # dedupe cleared
+        self.assertTrue(any("E_BAD_REQUEST" in v["text"]
+                            for v in ex.verdicts()))
+
+    def test_order_applied_clears_inflight(self):
+        led = CF.FakeLedger(CF.v4_ledger(builders=1))
+        ex = self._ex(ledger=led)
+        ex.set_program(self.make_prog(
+            production=[{"id": "p1", "verb": "order_build",
+                         "params": {"type": "ResourceCollector"}}]), tick=1)
+        issued = ex.on_tick(1)
+        oid = issued[0]["command_id"]
+        self.assertIn(oid, ex.ledger.in_flight())
+        self.assertTrue(ex.on_engine_event(
+            {"type": "orderApplied", "id": oid}, tick=2))
+        self.assertNotIn(oid, ex.ledger.in_flight())
+
+    # -- clamp verdicts ------------------------------------------------------
+    def test_clamp_emits_first_verdict(self):
+        ex = self._ex(ledger=CF.FakeLedger(
+            CF.v4_ledger(idle_collectors=1, builders=1)))
+        ex.validator.cap = 1
+        ex.set_program(self.make_prog(
+            production=[],
+            tasking=[{"id": "t1", "verb": "order_guard",
+                      "ships": [100], "target": 90},
+                     {"id": "t2", "verb": "order_dock",
+                      "ships": [100], "target": 90}]), tick=1)
+        ex.on_tick(1)
+        st = ex.item_status("t2")
+        self.assertEqual(st["clamped_count"], 1)
+        self.assertIn("cap", st["verdict"])
+        self.assertTrue(any(v["kind"] == "clamp" and v["subject"] == "t2"
+                            for v in ex.verdicts()))

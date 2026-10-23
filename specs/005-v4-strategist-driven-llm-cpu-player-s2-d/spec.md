@@ -7,10 +7,17 @@
 
 **Created**: 2026-10-23
 
-**Status**: Draft v2 — awaiting user review. 2026-10-23 amendment (decision 17):
-three-tier control architecture folded in pre-implementation — executor (code)
-+ S1 small/fast tactical model inside a delegation envelope + S2 strategist
-with widened (~120 s) pulse cadence. Supersedes the S1-absent assumption.
+**Status**: Draft v3 — amended from LIVE-ROUND evidence (2026-10-23, session
+18/19): the live round proved the data plumbing, not the tier design, was
+the failure (S2's pulse input carried LESS state than S1's: no enemy
+contacts, no asteroid ledger, no build menu, no research tree; async engine
+rejections were invisible; the strategist guessed a nonexistent tech name
+and never learned; bank ~187k sat unspent while the built-in CPU teched to
+IonCannonFrigates). Draft v3 adds the teaching firewall, the S2 arc, and
+the S1 history budget; supersedes Draft v2. Earlier amendment (decision 17):
+three-tier control architecture — executor (code) + S1 small/fast tactical
+model inside a delegation envelope + S2 strategist with widened (~120 s)
+pulse cadence.
 
 **Input**: User directive: "I think we got the design wrong. Make a spec for
 V4. Less procedural, more S2 to drive the program."
@@ -44,8 +51,17 @@ ratios, or research chains are hard-coded anywhere: the v3-era procedural
 economy is RETIRED; playbook behaviour enters as prompt material for S2
 (and S1's charter), steered by the models' decisions, not code constants.
 The playbook's intelligence is the models' job; the code's job is to obey
-promptly, validate strictly (including envelope legality), and record
-everything.
+promptly, validate strictly (including envelope legality), record everything,
+and EXPLAIN itself: the executor is a teaching firewall (FR-020) — every
+deny, coercion or clamp produces an actionable verdict line (what was
+refused, and what IS currently allowed), fed back to both models so the
+next attempt starts from the live rulebook, not a guess. S2's own memory is
+compacted by the arc (FR-021): a model-authored running summary, code-stored
+and budget-enforced, so raw match history never re-enters the strategist's
+limited window. S1's memory is a budget S2 allocates (FR-022). Awareness is
+a superset contract (FR-009): S2's pulse input carries the FULL world view
+(own ledger, enemy contacts, asteroid ledger, build menu, research tree)
+and S1's live view is the grant-filtered subset.
 
 **Out of scope (explicit)**: v4 does NOT change the game engine or the
 spec-003 command/event layer (imported unchanged); does not re-import or
@@ -249,8 +265,9 @@ S1's next input; S2's next program shows the reaction reflected.
    P0 still wakes S2 for the re-plan (FR-019).
 3. **Given** S1 attempting an action outside its grants (forbidden verb,
    foreign ship, out-of-zone), **When** validated, **Then** the item is
-   blocked with reason, recorded as a violation, and S1's next micro-input
-   carries the violation — never executed.
+   blocked with an actionable verdict naming the licensed verbs/ships
+   instead (FR-020), recorded as a violation, and the verdict feeds S1's
+   next micro-input — never executed.
 
 ## Edge Cases
 
@@ -266,8 +283,21 @@ S1's next input; S2's next program shows the reaction reflected.
    envelope grant explicitly grants override for those ships/grants —
    every override recorded.
 - Envelope violation (S1 attempts outside its grants): blocked at
-   validation, reason recorded, S1's next micro-input carries the
-   violation; never executed.
+   validation, actionable verdict recorded (FR-020), fed to S1's next
+   micro-input; never executed.
+- S2 names a nonexistent tech or hull (live-round: `MassDrive2Kt`): the
+   executor denies the item with the LEGAL alternatives in the verdict
+   (`researchable now: [...]` / `buildable now: [...]`); the async engine
+   rejection (orderRejected aux) folds into the same verdict stream (FR-023
+   behaviour of FR-020's sinks) — a guessed name is learned once, never
+   repeated silently.
+- Arc missing, stale, or over budget: driver code seeds/reseeds the arc
+   from mechanical rollups, or clamps it with a verdict; the pulse input
+   always renders a non-empty arc line (FR-021).
+- Reflex floor vs parade collectors: parade/idle ResourceCollectors are
+   continuously re-dispatched to the nearest-value asteroid by the reflex
+   path (live-round: an RC sat in parade ~20k ticks producing nothing);
+   reflex enforcement is per-tick, not one-shot (FR-006 clarified).
 - Paused match: no pulses, no model calls on EITHER channel (game-time
    cadence, carried).
 - Multiple v4 seats: separate drivers; one binding each (carried).
@@ -303,16 +333,21 @@ S1's next input; S2's next program shows the reaction reflected.
   interpret. Fast tactical initiative belongs to S1 ONLY inside the
   program's delegation envelope (FR-017).
 - **FR-005**: The executor is a deterministic translator: current program
-  items → validated commands at the tick cadence (≤6 per tick, per-tick
-  order ids), plus the enumerated reflex set and the S1 channel's
-  validated micro-commands (FR-018). Program semantics are fixed
-  order: production (build/research), tasking (fleet verbs), posture not
-  directly executable (rendered into S2-style context for the NEXT pulse
-  input, and its `delegate` field governs S1 legality).
+   items → validated commands at the tick cadence (≤6 per tick, per-tick
+   order ids), plus the enumerated reflex set and the S1 channel's
+   validated micro-commands (FR-018). Program semantics are fixed
+   order: production (build/research), tasking (fleet verbs), posture not
+   directly executable (rendered into S2-style context for the NEXT pulse
+   input, and its `delegate` field governs S1 legality). The executor also
+   carries the teach duty (FR-020): it explains its own refuses, coercions
+   and clamps as actionable verdicts — it never invents orders, it only
+   explains its own decisions.
 - **FR-006**: Reflex set (EXACTLY, v4): (a) idle collector → nearest
-  asteroid harvest; (b) full collector → deliver/dock. Reflexes run only
-  where no program item AND no live S1 envelope command covers those
-  ships — program > S1 > reflex.
+   asteroid harvest; (b) full collector → deliver/dock. "Idle" includes
+   parade/no-harvest-order collectors — the reflex path re-checks and
+   re-dispatches EVERY tick (continuous enforcement, not one-shot), unless
+   a program item AND a live S1 envelope command covers those ships —
+   program > S1 > reflex.
 - **FR-007**: S2 program pulses every 90–240 s game time
   (configuration; default 120 s — sized to the measured ~2 min large-model
   latency) with immediate async wake on P0; S1 micro-pulses every 5–15 s
@@ -322,11 +357,19 @@ S1's next input; S2's next program shows the reaction reflected.
 - **FR-008**: Program packets are schema-validated WHOLE before apply
   (all-or-nothing; previous program stands on failure with the reason
   fed to S2's next input); versions monotonic; full history recorded.
-- **FR-009**: Pulse input is a compact budgeted observation (default ≤12k
-  units): ledger echo line-per-unit-group, event rollups (P0 verbatim
-  pinned), the previous program with per-item status from the executor
-  (executed / failed / blocked: validator reason), and the reflex log
-  digest. Static-prefix layout for cache-friendly serving.
+- **FR-009**: Pulse input is a budgeted observation (default ≤12k units)
+   in which S2's view is the SUPERSET (live-round lesson: the strategist
+   had LESS state than S1 and could not name targets, techs or hulls).
+   Sections, in render order: arc + last posture (FR-021); P0 verbatim
+   pinned; mechanical rollups since last pulse (builds materialized,
+   kills, researches, spend — code-computed from the trail); program
+   statuses per item incl. async engine orderRejected aux codes (FR-023);
+   own ledger echo (per-ship ids/posture/cargo); ENEMY CONTACTS
+   (id/hull/pos/dist-to-base — same view S1 receives); asteroid ledger
+   (id/pos/value, nearest-first, top-N + totals); build menu (unlocked
+   hulls + costs + current buildQueue state); research menu (researchable
+   techs with missing prerequisites, labs count, lab-busy state). Static
+   prefix layout for cache-friendly serving; budget enforcement per FR-013.
 - **FR-010**: P0 classification (the v3 digest classifier's rule set,
   carried as config) wakes the strategist immediately; P0 items survive
   until superseded.
@@ -341,9 +384,14 @@ S1's next input; S2's next program shows the reaction reflected.
   executor/driver down → seat idles; interface down → both idle; every
   transition recorded; recovery only via re-observe.
 - **FR-013**: Budgets per channel are configuration (S2 in ≤12k; S2 out
-  ≤3k; S1 in ≤4k; S1 out ≤900), enforced on the deliverable packet; breach
-  → prune oldest program history from the input + recorded alert; never
-  silent growth.
+   ≤3k; S1 in ≤4k; S1 out ≤900), enforced on the deliverable packet; breach
+   → prune with recorded alert; never silent growth. PRUNE ORDER (both
+   channels, least-to-most valuable, live-round lesson: memory/echo material
+   is cut before world state): micro-history/s1_context first (FR-022),
+   then arc clamping (length, not presence — FR-021), then event rollup
+   history, then program echo, then ledger/contacts/menus — the world view
+   is the last thing that ever gets cut, and the arc is clamped in length
+   rather than dropped.
 - **FR-014**: The v3 S1 implementation (s1tick/economy modules and their
   digest-window/directive protocol) stays retired in-tree, unreferenced.
   The v4 S1 channel is NEW code with its own contract (FR-018/FR-019) —
@@ -351,38 +399,85 @@ S1's next input; S2's next program shows the reaction reflected.
   as v3's D7 for the old modules.
 - **FR-015**: Model endpoints config-only per channel; local/LAN only.
 - **FR-016**: The playbook document (A1–A7/B1–B4 behaviours) is
-  playbook MATERIAL for S2's charter and S1's micro-charter (data,
-  retunable), verified by the harness; it MUST NOT appear as code
-  constants in the v4 driver.
+   playbook MATERIAL for S2's charter and S1's micro-charter (data,
+   retunable), verified by the harness; it MUST NOT appear as code
+   constants in the v4 driver.
 - **FR-017**: The DELEGATION ENVELOPE is a field of the Program packet:
-  a list of grants (allowed verbs, subject ships or scope classes,
-  optional zones/conditions, optional override-of-tasking grants),
-  versioned with the program. S1 commands are validated against the
-  CURRENT envelope: outside it → blocked, reason recorded, never
-  executed; the envelope cannot grant build/research unless explicitly
-  listed; no envelope ⇒ S1 is advisory-only that pulse.
+   a list of grants (allowed verbs, subject ships or scope classes,
+   optional zones/conditions, optional override-of-tasking grants),
+   versioned with the program. S1 commands are validated against the
+   CURRENT envelope: outside it → blocked with an actionable verdict
+   (FR-020), reason recorded, never executed; the envelope cannot grant
+   build/research unless explicitly listed; no envelope ⇒ S1 is
+   advisory-only that pulse. The envelope is also S1's filter on what it
+   SEES: S1's live view shows scope membership per ship (in-scope markers).
 - **FR-018**: S1 micro-packets are schema-validated WHOLE before apply
-  (all-or-nothing; ≤1 bounded repair attempt per micro-pulse); each S1
-  command cites the program version + envelope grant + S1 decision id,
-  and is recorded as `micro` trail rows. S1 input is a budgeted compact
-  observation (static micro-charter prefix, P0 verbatim pinned, live
-  program + envelope echo, own previous micro-packet status).
+   (all-or-nothing; ≤1 bounded repair attempt per micro-pulse); each S1
+   command cites the program version + envelope grant + S1 decision id,
+   and is recorded as `micro` trail rows. S1 input is a budgeted compact
+   observation (static micro-charter prefix, P0 verbatim pinned, live
+   program + envelope echo, own previous micro-packet status) PLUS the
+   rolling verdict section: recent executor denials/coercions so denied
+   attempts teach the live rulebook instead of repeating by silence
+   (FR-020), PLUS the S1 history window S2 allocated (FR-022).
 - **FR-019**: P0 events wake BOTH channels out-of-cycle: S1 acts
-  immediately within the envelope (defense micro), S2 is woken to
-  re-plan at the next tick boundary's pulse slot; P0 items survive until
-  superseded in both channels' inputs.
+   immediately within the envelope (defense micro), S2 is woken to
+   re-plan at the next tick boundary's pulse slot; P0 items survive until
+   superseded in both channels' inputs.
+- **FR-020**: THE EXECUTOR IS A TEACHING FIREWALL. Every deny, coercion,
+   or clamp it performs emits an ACTIONABLE VERDICT LINE naming what was
+   refused and what IS currently allowed (licensed verbs/ships of the
+   active grant; legal techs/hulls with costs; the cap that clamped).
+   Verdict text streams to three sinks: (a) trail `validation` rows
+   (measurable), (b) S2's per-item PROGRAM STATUS in the next pulse input,
+   (c) S1's next micro input as a rolling verdict section. Engine-side
+   asynchronous orderRejected/ship events fold into the same stream with
+   their aux codes (FR-023) so nothing fails invisibly. The executor NEVER
+   invents orders — it explains only its own decisions. Verdicts are
+   bounded text within the channel's byte budget.
+- **FR-021**: THE ARC — S2's compacted memory. The program packet carries
+   an optional `arc` field (default budget ~600 chars): S2's own running
+   high-level story (match phase, enemy shape shown, tried/failed, current
+   plan), rewritten by S2 each pulse. The driver stores only the LATEST
+   arc; the next pulse input renders it back as "# ARC (your summary so
+   far)"; raw match history NEVER re-enters S2's window (the postgres
+   trail keeps history for replay/harness, not for the model). A missing
+   or stale arc is seeded/reseeded by code from mechanical rollups; an
+   over-budget arc is length-clamped with a verdict (presence never
+   dropped). Posture text folds into the same memory lane.
+- **FR-022**: S1's HISTORY WINDOW IS S2-ALLOCATED. The program packet may
+   carry `s1_context: {max_exchanges: int, ticks: int}`; the executor keeps
+   S1 a rolling micro-history (previous micro-packets + their outcomes)
+   truncated mechanically to exactly that window, subject to the FR-013
+   ceiling (s1_context is the FIRST thing pruned under breach). Absent
+   s1_context ⇒ S1 stays stateless per pulse (current behaviour).
+   Widening/crushing the window is S2's tactical call (stale-threat memory
+   vs fresh eyes), never driver doctrine.
+- **FR-023**: ASYNC FEEDBACK. Engine events (orderRejected with aux codes,
+   shipDestroyed, research completion) are consumed into per-item program
+   status and the S1 micro statuses; a command the engine rejected is
+   reported as `denied: <aux + reason>` through the FR-020 verdict sinks
+   in the NEXT relevant input — issued (= executor applied) and accepted
+   (= engine acked) are distinct outcomes, never conflated.
 
 ### Key Entities
 
 - **Program**: version document — production[] (order_build/order_research
-  items with params), tasking[] (verb + ships/target + optional
-  schedule/priority), posture (advisory text rendered for the NEXT pulse
-  input only), delegate[] (the delegation envelope: grants S2 gives S1 —
-  verbs, subjects/scope, zones, override flags), version (monotonic),
-  issued_tick/pulse.
+   items with params), tasking[] (verb + ships/target + optional
+   schedule/priority), posture (advisory text rendered for the NEXT pulse
+   input only), delegate[] (the delegation envelope: grants S2 gives S1 —
+   verbs, subjects/scope, zones, override flags), arc (optional: S2's
+   running compacted story, FR-021), s1_context (optional: S1's history
+   window budget, FR-022), version (monotonic), issued_tick/pulse.
+- **Arc**: the latest S2-authored compacted summary (budgeted); stored by
+   the driver, rendered into every pulse input; never absent (code seeds
+   from rollups); history lives in the trail, not in the window.
+- **Verdict**: one actionable executor/engine-decision line (deny/coerce/
+   clamp/denied-by-engine + what IS allowed); recorded as `validation`
+   rows; rendered into S2's program status and S1's verdict section (FR-020).
 - **DelegationEnvelope**: the program's `delegate[]` — validated together
-  with the packet; the ONLY license S1 has to issue commands this
-  program-generation; recorded for audit with every S1 action.
+   with the packet; the ONLY license S1 has to issue commands this
+   program-generation; recorded for audit with every S1 action.
 - **MicroPacket**: S1's per-micro-pulse deliverable — validated WHOLE
   against the envelope; tasking verbs only (production forbidden unless a
   grant explicitly lists order_build/order_research); each command cites
@@ -411,10 +506,13 @@ S1's next input; S2's next program shows the reaction reflected.
   seat stalling; commands at cadence; zero invalid commands at the game
   boundary across ≥3 matches.
 - **SC-002**: Production, research and fleet decisions are
-  model-decided and traceable: strategic commands ≥90% cite a live
-  program item, S1 micro-commands 100% cite their envelope grant +
-  decision id (trail-verifiable); collectors harvesting within the first
-  five minutes of every observed opening.
+   model-decided and traceable: strategic commands ≥90% cite a live
+   program item, S1 micro-commands 100% cite their envelope grant +
+   decision id (trail-verifiable); collectors harvesting within the first
+   five minutes of every observed opening; S2's pulse input contains the
+   superset sections (enemy contacts, asteroid ledger, build menu,
+   research menu) in ≥95% of pulse inputs (trail-verifiable from archived
+   input rows).
 - **SC-003**: In ≥2 of 3 recorded matches the program versions advance
   (S2 re-plans from observed state) AND research progresses (≥1 tech
   accepted past the boot state's researched set in matches >15 min).
@@ -423,12 +521,20 @@ S1's next input; S2's next program shows the reaction reflected.
    injection round); S1 acts in-envelope within one micro-pulse of the
    wake.
 - **SC-005**: Budget adherence ≥95% per channel (S2 in/out, S1 in/out);
-   no growth trend; breaches recorded with prunes.
+   no growth trend; breaches recorded with prunes applying the FR-013
+   prune order (arc length-clamped, never dropped; s1_context pruned
+   first); arc present and non-empty in every pulse input; verdicts ≤
+   their configured byte budget per channel.
 - **SC-006**: Harness series vs the built-in CPU at each difficulty with
    the v3 report measures + program-adherence/revision counts +
-   S1-envelope adherence and violation counts: beginner majority wins;
-   intermediate competitive (draws or better fraction); advanced
-   measured+reported.
+   S1-envelope adherence and violation counts + NEW v3-aware measures:
+   deny rate per channel (verdicts / attempted items), repeated-identical-
+   denial rate (after FR-020 the same denial must not recur unchanged),
+   verdict legibility (each verdict names at least one allowed
+   alternative), arc freshness (arc byte-age from last S2 rewrite),
+   reflex idle-RC re-dispatch latency (idle/parade collector → harvest
+   order ≤1 tick): beginner majority wins; intermediate competitive
+   (draws or better fraction); advanced measured+reported.
 - **SC-007**: Replayability from the postgres trail alone for arbitrary
   tick ranges.
 - **SC-008**: Degradation + coexistence matrix matches spec-004 §5
@@ -459,7 +565,16 @@ S1's next input; S2's next program shows the reaction reflected.
    rounds show the envelope tier unnecessary, config disables the S1
    channel entirely (reverting to program + reflex behaviour) without a
    spec change.
+- **Draft v3 from live evidence** (2026-10-23, sessions 18/19 + user
+   review): the teaching firewall (FR-020), the arc (FR-021), S1's
+   history window (FR-022), async feedback (FR-023) and the FR-009
+   superset input exist because the live round showed the strategist
+   blind (no enemies/asteroids/menus in its input), guessing tech names
+   that the engine rejected invisibly, and the seat inert (1 build item,
+   no research, bank unspent) while the built-in CPU teched to frigates.
+   Defaults: arc ~600 chars; s1_context absent ⇒ stateless S1; verdict
+   budget small (hundreds of bytes) and counted against channel budgets.
 - **The game**: unchanged; spec-003 layer unchanged; peer-player
-  orientation (not an engine/lobby mode) carried from spec 004.
+   orientation (not an engine/lobby mode) carried from spec 004.
 - **Testing convention**: launch-and-poll live rounds against the
   established multiplayer savegame workflow (cash-inject by default).

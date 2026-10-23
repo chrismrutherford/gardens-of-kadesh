@@ -148,6 +148,25 @@ class TestV4Config(unittest.TestCase):
         self.assertEqual(cfg.get("v4.budgets"),
                          {"s2_in": 12288, "s2_out": 3072, "s1_in": 4096,
                           "s1_out": 900})
+        # Draft v3 (decision 19): arc/verdict/asteroid knobs (FR-020/021/009)
+        self.assertEqual(cfg.get("v4.arc_chars"), 600)
+        self.assertEqual(cfg.get("v4.verdict_chars"), 200)
+        self.assertEqual(cfg.get("v4.asteroid_top_n"), 32)
+        self.assertEqual(cfg.get("v4.verdict_feed_k"), 6)
+
+    def test_draftv3_knobs_validated(self):
+        cases = (({"v4": {"arc_chars": 0}}, "arc_chars"),
+                 ({"v4": {"verdict_chars": -1}}, "verdict_chars"),
+                 ({"v4": {"asteroid_top_n": 999}}, "asteroid_top_n"),
+                 ({"v4": {"verdict_feed_k": "x"}}, "verdict_feed_k"))
+        for over, frag in cases:
+            with self.assertRaises(C.ConfigError) as cm:
+                C.load_obj(copy.deepcopy(over))
+            self.assertIn(frag, str(cm.exception))
+        cfg = C.load_obj({"v4": {"arc_chars": 300, "verdict_chars": 120,
+                                 "asteroid_top_n": 8, "verdict_feed_k": 3}})
+        self.assertEqual(cfg.get("v4.arc_chars"), 300)
+        self.assertEqual(cfg.get("v4.verdict_feed_k"), 3)
 
     def test_explicit_values_win(self):
         cfg = C.load_obj({"v4": {"pulse_seconds": 90,

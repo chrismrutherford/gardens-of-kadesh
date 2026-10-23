@@ -18,6 +18,10 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(__file__), "..", "..", "twincore"))
 
 import conftest as CF  # noqa: E402
+import twincore.program as P  # noqa: E402
+
+
+import copy  # noqa: E402
 
 
 class MemRecorder:
@@ -106,7 +110,10 @@ class TestAsyncTwoPhase(PulseBase):
                 break
         self.assertEqual(drv.executor.program.version, 1)
         self.assertTrue(out)                  # program v1 commands minted
-        self.assertTrue(all(m["program_version"] == 1 for m in out))
+        # mix may include reflex gap-fillers (version None) at the same
+        # tick the program landed — program-cited items are v1
+        self.assertTrue(all(m["program_version"] in (1, None) for m in out))
+        self.assertTrue(any(m["program_version"] == 1 for m in out))
         self.assertGreaterEqual(len(ch.calls), 1)
         rows = drv.recorder.scan(kinds=["program"])
         self.assertTrue(any(r.get("event") == "applied" and
@@ -233,11 +240,140 @@ class TestCadenceAndDegradation(PulseBase):
         ch.delay = 0.15
         drv = self.VD.V4Driver(channel=ch, recorder=MemRecorder(),
                                pulse_ticks=2, ledger=CF.FakeLedger())
+        spawned = []
+        orig_start = drv.loop.start_pulse
+        drv.loop.start_pulse = (lambda tick, paused=False:
+                                (spawned.append(tick),
+                                 orig_start(tick, paused=paused))[1])
         for t in range(1, 13):               # ticks advance while lagging
             drv.on_tick(t)
             drv.loop.harvest()
-        self.assertLessEqual(len(ch.calls), 6)   # ≤1 per boundary
+        # ≤1 spawn per boundary (anchor advances AT spawn; the lagging
+        # pulse only ever REDUCES the count, never storms it). Each pulse
+        # may make ≤ max_repairs+1 propose attempts.
+        self.assertLessEqual(len(spawned), 6)
+        self.assertLessEqual(len(ch.calls), len(spawned) * 2)
 
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestDraftV3Driver(unittest.TestCase):
+    """Decision 19 at the driver: arc store (FR-021), mechanical rollups
+    (FR-009), superset pulse input (enemy contacts/asteroid/menus), and
+    the engine-event consumer wiring."""
+
+    def setUp(self):
+        import twincore.v4driver as VD
+        self.VD = VD
+
+    def techtree(self):
+        return {"labs": 1, "canResearch": True,
+                "researched": ["MassDrive1Kt"],
+                "locked": [
+                    {"type": "Carrier", "disabled": False,
+                     "missing": ["MassDrive1Mt", "RepairTech"]},
+                    {"type": "LightInterceptor", "disabled": False,
+                     "missing": []},
+                ]}
+
+    def mk(self, **led_kw):
+        led = CF.FakeLedger(CF.v4_ledger(idle_collectors=1, asteroids=3,
+                                         builders=1, enemies=1, **led_kw))
+        drv = self.VD.V4Driver(channel=FakeChannel([]), recorder=MemRecorder(),
+                               pulse_ticks=9999, ledger=led,
+                               client=CF.FakeClient())
+        return drv, led
+
+    # -- arc store (FR-021) ------------------------------------------------
+    def test_arc_stored_rendered_and_clamped(self):
+        drv, led = self.mk()
+        msgs, meta = drv.loop.pulse_input(1)
+        self.assertIn("(seeded by code", msgs[0]["content"])   # never absent
+        drv.loop.set_arc("opening. econ ramp. no contact." * 20, 5)
+        msgs, _ = drv.loop.pulse_input(6)
+        self.assertIn("[stored at tick 5]", msgs[0]["content"])
+        self.assertIn("opening. econ ramp", msgs[0]["content"])
+        drv.loop.arc_chars = 40
+        clamped = drv.loop.set_arc("x" * 100, 7)
+        self.assertTrue(clamped)
+        self.assertEqual(len(drv.loop.arc_text), 40)
+
+    def test_apply_program_stores_arc_and_notes_verdict_on_clamp(self):
+        drv, led = self.mk()
+        prog = P.validate_packet(
+            copy.deepcopy(CF.v4_packet(1, arc="arc " + "y" * 700)), 0)
+        drv.loop.arc_chars = 100
+        drv._apply_program(prog, tick=9)
+        self.assertEqual(len(drv.loop.arc_text), 100)
+        self.assertTrue(any(v["subject"] == "arc" and v["kind"] == "clamp"
+                            for v in drv.executor.verdicts()))
+        rows = drv.recorder.scan(kinds=["program"])
+        self.assertTrue(any(r.get("arc") for r in rows))
+
+    # -- rollups + superset sections (FR-009) -------------------------------
+    def test_superset_sections_in_pulse_input(self):
+        drv, led = self.mk(tech_tree=self.techtree(), build_queue=[
+            {"builder": 90, "items": ["ResourceCollector"]}])
+        msgs, meta = drv.loop.pulse_input(1)
+        text = msgs[0]["content"]
+        for h, frag in (("# ENEMY CONTACTS", "enemy 10 LightInterceptor"),
+                        ("# ASTEROID LEDGER", "value=5000"),
+                        ("# BUILD MENU", "locked: Carrier"),
+                        ("# BUILD MENU", "buildQueue"),
+                        ("# RESEARCH MENU", "tech MassDrive1Mt"),
+                        ("# RESEARCH MENU", "researched: ['MassDrive1Kt']")):
+            self.assertIn(h, text)
+            self.assertIn(frag, text)
+
+    def test_mechanical_rollups_diff_between_pulses(self):
+        drv, led = self.mk()
+        msgs1, _ = drv.loop.pulse_input(1)
+        self.assertIn("first observation", msgs1[0]["content"])
+        # world changes: new own ship, bank growth, new research
+        led._ships_all[301] = {"id": 301, "type": "LightInterceptor",
+                               "owner": 0, "pos": [1.0, 1.0, 1.0],
+                               "order": "parade"}
+        led._state["bank"] = 9000.0
+        led._state["techTree"] = {"researched": ["MassDrive1Kt"],
+                                  "locked": []}
+        drv.loop.kills_since_pulse = 2
+        msgs2, _ = drv.loop.pulse_input(2)
+        text = msgs2[0]["content"]
+        self.assertIn("builds materialized: +1", text)
+        self.assertIn("kills (enemy lost): +2", text)
+        self.assertIn("9000.0", text)
+        self.assertIn("MassDrive1Kt", text)
+
+    # -- event consumer via the driver (FR-023) ------------------------------
+    def test_consume_events_counts_kills_and_rejected_orders(self):
+        drv, led = self.mk()
+        prog = P.validate_packet(CF.v4_packet(1), 0)
+        drv._apply_program(prog, tick=1)
+        issued = drv.executor.on_tick(1)
+        self.assertTrue(issued)
+        oid = issued[0]["command_id"]
+        eaten = drv.consume_events([
+            {"type": "shipDestroyed", "tick": 2, "id": 1, "aux": 1,
+             "owner": 1},
+            {"type": "shipDestroyed", "tick": 3, "id": 1, "aux": 1,
+             "owner": 1},                       # duplicate → deduped? no
+            {"type": "orderRejected", "tick": 2, "id": oid, "aux": 8,
+             "owner": 0}], tick=2)
+        self.assertEqual(drv.loop.kills_since_pulse, 2)
+        st = drv.executor.item_status(issued[0]["item_id"])
+        self.assertEqual(st["resolution"], "engine_denied")
+        self.assertNotIn(oid, led.in_flight())
+        self.assertTrue(any("E_BAD_REQUEST" in v["text"]
+                            for v in drv.executor.verdicts()))
+
+    # -- engine ack flow (orderApplied) --------------------------------------
+    def test_order_applied_via_driver_events(self):
+        drv, led = self.mk()
+        prog = P.validate_packet(CF.v4_packet(1), 0)
+        drv._apply_program(prog, tick=1)
+        issued = drv.executor.on_tick(1)
+        oid = issued[0]["command_id"]
+        drv.consume_events([{"type": "orderApplied", "tick": 2,
+                             "id": oid}], tick=2)
+        self.assertNotIn(oid, led.in_flight())
