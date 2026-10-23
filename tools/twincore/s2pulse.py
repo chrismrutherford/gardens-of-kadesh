@@ -213,9 +213,12 @@ class S2PulseLoop:
     # -- async two-phase (US2-3: the strategist must never delay S1) ----------
     def start_pulse(self, observed_tick, paused=False):
         """Phase 1: build input + spawn the HTTP call in a worker thread.
-        Nothing gameplay-bearing happens here; returns True when spawned."""
+        Nothing gameplay-bearing happens here; returns True when spawned.
+        The cadence anchor advances AT SPAWN — a failed/lagging call can
+        never re-due the same boundary (spawn-storm guard)."""
         if paused:
             return False
+        self._next_pulse_at = observed_tick + self.pulse_ticks
         if self._worker is not None and self._worker.is_alive():
             return False                      # ≤1 packet per cycle boundary
         self._pulse_started_at = observed_tick
