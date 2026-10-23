@@ -69,6 +69,13 @@ def _sid(v):
         return 0
 
 
+def _dist2(a, b3):
+    """Squared distance between point a [x,y,z] and point b3 [x,y,z]."""
+    ax, ay, az = (a + [0, 0, 0])[:3] if isinstance(a, list) else (0, 0, 0)
+    bx, by, bz = (b3 + [0, 0, 0])[:3] if isinstance(b3, list) else (0, 0, 0)
+    return (ax - bx) ** 2 + (ay - by) ** 2 + (az - bz) ** 2
+
+
 IO_LOG_PATHS = {"s1": "/tmp/s1-io.log", "s2": "/tmp/s2-io.log",
                 "ex": "/tmp/ex-io.log"}
 ENV_KEYS = {"s1": "V4_S1_IO_LOG", "s2": "V4_S2_IO_LOG",
@@ -209,6 +216,13 @@ class PulseLoop:
         prev = self.executor.program if self.executor else None
         prev_lines, status_lines = [], []
         if prev is not None:
+            for g in prev.delegate:
+                exp = g.get("expires_tick")
+                if exp is not None and tick > exp:
+                    status_lines.append(
+                        "envelope: grant %s EXPIRED (at %d, now %d) — "
+                        "re-issue a wider window if S1 should act"
+                        % (g["grant_id"], exp, tick))
             prev_lines = [json.dumps(prev.raw, sort_keys=True,
                                      separators=(",", ":"))]
             status_lines = [
@@ -476,6 +490,9 @@ class S1MicroLoop:
                        .replace("{cadence}", str(max(1, cadence)))]
         grants = json.dumps(prog.delegate, sort_keys=True) \
             if prog is not None else "[]"
+        if prog is None or not prog.delegate:
+            grants = ("NO ACTIVE LICENSE — advisory-only, reply with no "
+                      "tool calls: %s" % grants)
         status_lines = ["%s %s cmds=%s" % (s["item_id"], s["resolution"],
                                            s["command_ids"])
                         for s in (self.executor.statuses() or [])
@@ -483,7 +500,7 @@ class S1MicroLoop:
         text, meta = build_micro_input(
             charter_lines=charter,
             p0_items=[],
-            envelope_lines=[grants],
+            envelope_lines=[grants] + self._grant_status(prog, tick),
             live_lines=self._live_view(view, prog),
             prev_micro_lines=[],
             prev_status_lines=status_lines,
@@ -493,16 +510,70 @@ class S1MicroLoop:
                  "silent." % tick}]
         return msgs, meta
 
-    def _live_view(self, view, prog):
+    def _grant_status(self, prog, tick):
+        """License state made explicit: expired grants must reach BOTH
+        models' next inputs (S2 re-issues windows, S1 stays silent)."""
+        out = []
+        if prog is None:
+            return out
+        for g in prog.delegate:
+            exp = g.get("expires_tick")
+            if exp is not None and tick > exp:
+                out.append("grant %s EXPIRED (at %d, now %d) — no license "
+                           "until the strategist renews it"
+                           % (g["grant_id"], exp, tick))
+        if not any(g.get("expires_tick") is not None for g in
+                   prog.delegate):
+            out.append("grants have no expiry window")
+        return out
+
+    def _live_view(self, view, prog=None, tick=None):
+        """Tactical view: own ships with positions, base distance, scope
+        membership, plus enemy contacts (id/type/pos/dist)."""
+        g = (prog.delegate[0] if prog and prog.delegate else None) or {}
+        zone = g.get("zone")
+        cx, cy, cz = (zone[0], zone[1], zone[2]) if zone else \
+            (None, None, None)
         lines = []
+        base = None
+        own = []
+        enemies = []
         for sid, s in sorted((view.get("ships_all") or {}).items(),
                              key=lambda kv: _sid(kv[0])):
+            pos = s.get("pos") or [0, 0, 0]
             if s.get("owner") != self.own_player:
+                enemies.append((sid, s, pos))
                 continue
+            s = dict(s, id=sid)
+            own.append(s)
+            if "Mothership" in (s.get("type") or "") or \
+                    "Carrier" in (s.get("type") or ""):
+                base = pos
+        d2 = _dist2
+        for s in own:
+            pos = s.get("pos") or [0, 0, 0]
             o = s.get("order")
             verb = o.get("verb") if isinstance(o, dict) else o
-            lines.append("ship %s %s order=%s" % (sid, s.get("type") or "?",
-                                                  verb or "-"))
+            war = "ResourceCollector" not in (s.get("type") or "")
+            near = (d2(pos, cx, cy, cz) <= zone[3] ** 2) if zone else \
+                (d2(pos, base) <= 22500 ** 2) if (war and base) else None
+            tag = ("in-scope" if near else "out-of-scope") if near is not None \
+                and war else ""
+            dist = int(d2(pos, base) ** 0.5) if base else -1
+            lines.append("ship %s %s pos%s %s%s dist_to_base=%s"
+                         % (s["id"], s.get("type") or "?",
+                            [int(v) for v in pos],
+                            ("order=%s" % (verb or "none")),
+                            (" [%s]" % tag) if tag else "", dist))
+        if enemies:
+            lines.append("ENEMY CONTACTS:")
+            for sid, s, pos in enemies[:12]:
+                dist = int(d2(pos, base) ** 0.5) if base else -1
+                lines.append("  enemy %s %s pos%s dist_to_base=%s"
+                             % (sid, s.get("type") or "?",
+                                [int(v) for v in pos[:3]], dist))
+        else:
+            lines.append("ENEMY CONTACTS: none")
         lines.append("resources %d" % len(view.get("resources") or {}))
         return lines
 
