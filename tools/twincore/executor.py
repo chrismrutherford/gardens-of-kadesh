@@ -87,7 +87,7 @@ class Executor:
 
     def __init__(self, client, ledger, recorder=None, validator=None,
                  own_player=0, max_per_tick=None, order_seq_start=1000,
-                 reflexes=None):
+                 reflexes=None, zone=None, zone_radius=15000):
         self.client = client
         self.ledger = ledger
         self.recorder = recorder
@@ -105,6 +105,8 @@ class Executor:
         if reflexes:
             self.reflexes.update({k: bool(v) for k, v in reflexes.items()})
         self._micro_queue = []   # envelope-validated S1 items awaiting a tick
+        self.zone = zone
+        self.zone_radius = zone_radius
 
     # -- S1 micro lane (FR-018; contracts/s1-envelope.md §2–3) ---------------
     def feed_micro(self, applied, version, seq, tick):
@@ -117,22 +119,54 @@ class Executor:
 
     def _micro_entries(self, tick):
         """S1 items → proposals; program wins on shared ships UNLESS the
-        grant carries override_tasking (the priority law, FR-017)."""
+        grant carries override_tasking; grant scope classes resolve to a
+        mechanical ship-set here (license interpretation, not doctrine)."""
         covered = self._covered_ships()
         out = []
         while self._micro_queue:
             it = self._micro_queue.pop(0)
-            ships = set(it.get("ships") or [])
             grant = self.program.grant_for(it.get("grant")) \
                 if self.program is not None else None
             override = bool(grant and grant.get("override_tasking"))
-            if (ships & covered) and not override:
+            ships = it.get("ships") or []
+            scope = grant.get("ships") if grant else None
+            if isinstance(scope, str) or (not ships and grant is not None):
+                resolved = self._scope_ships(scope, tick)
+                ships = ships or resolved
+            if not ships:
+                continue                      # nothing licensed to command
+            it = dict(it, ships=[int(s) for s in ships])
+            if (set(ships) & covered) and not override:
                 continue    # program wins; S1 yield recorded via no-issue
             out.append(("s1:%s" % it["id"],
                         self._tasking_proposal(it), "micro",
                         self.program.version if self.program is not None
                         else None))
         return out
+
+    def _scope_ships(self, scope, tick):
+        """Expand a grant scope to concrete ship ids from fresh state.
+        zone (if granted) bounds defense; fleet = all own non-collectors;
+        defense = own non-collectors near the base."""
+        view = self.ledger.as_dict() if self.ledger is not None else {}
+        own = [s for s in (view.get("ships_all") or {}).values()
+               if s.get("owner") == self.own_player]
+        war = [s for s in own if s.get("type") != COLLECTOR]
+        if scope == "scope:fleet":
+            return [s["id"] for s in war]
+        if scope == "scope:defense":
+            zone = (self.zone or self._default_zone(own))
+            cx, cy, cz, r = zone
+            in_zone = [s for s in war if _dist2(
+                s.get("pos") or [0, 0, 0], [cx, cy, cz]) <= r * r]
+            return [s["id"] for s in in_zone]
+        return []
+
+    def _default_zone(self, own):
+        base = next((s for s in own if "Mothership" in (s.get("type") or "")
+                     or "Carrier" in (s.get("type") or "")), None)
+        p = (base or {}).get("pos") or [0, 0, 0]
+        return [p[0], p[1], p[2], self.zone_radius]
 
     # -- program generation ---------------------------------------------
     def set_program(self, program, tick):

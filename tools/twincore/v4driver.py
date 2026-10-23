@@ -36,6 +36,32 @@ from twincore.executor import Executor
 import aiplay_protocol as AIP
 
 
+def _coerce_ship_ids(v):
+    """Models pass ships as string/json-string/scalar sometimes — coerce,
+    never guess ids."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        t = v.strip()
+        try:
+            v = json.loads(t) if t and t[0] in "[{0123456789" else None
+        except (ValueError, TypeError):
+            v = None
+        if isinstance(v, list):
+            v = [x.get("id") if isinstance(x, dict) else x for x in v]
+    if isinstance(v, (int, float)):
+        v = [v]
+    out = []
+    for x in v if isinstance(v, list) else []:
+        try:
+            xi = int(x)
+        except (TypeError, ValueError):
+            continue
+        if xi > 0:
+            out.append(xi)
+    return out[:64]
+
+
 def _sid(v):
     try:
         return int(v)
@@ -298,7 +324,10 @@ MICRO_CHARTER = (
     "You are S1, the fast tactical model of seat {seat}. You react EVERY "
     "{cadence}s within the delegation envelope your strategist licensed. "
     "Reply ONLY with tool calls using the provided order tools (tasking "
-    "verbs). Ship ids come from the LIVE VIEW. If nothing needs reacting "
+    "verbs). Every tool call MUST pass ships as an ARRAY of integer ship "
+    "ids from the LIVE VIEW (e.g. ships: [2, 3]); a call with no valid "
+    "ship ids is dropped. Ship ids come from the LIVE VIEW. If nothing "
+    "needs reacting "
     "to, reply with NO tool calls. Production/build tools are NOT yours "
     "unless explicitly granted."
 )
@@ -482,9 +511,10 @@ class S1MicroLoop:
             gid = self._licensing_grant(verb, prog)
             if gid:
                 item["grant"] = gid
-            if params.get("ships"):
-                item["ships"] = [int(s) for s in
-                                 (params.get("ships") or [])]
+            ships = params.get("ships")
+            ships = _coerce_ship_ids(ships)
+            if ships:
+                item["ships"] = ships
             for k in ("target", "tactics"):
                 if params.get(k) is not None:
                     item[k] = params[k]
