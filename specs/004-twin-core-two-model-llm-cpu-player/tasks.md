@@ -123,12 +123,12 @@ full match, boot-default.json).
   retried ≤2/tick then idle tick + streak recorded. Static-first prompt
   layout verified (FR-022). Tests with stub LLM channel (FR-008: no durable
   S1 memory; trim/reset safe)
-- [ ] T014 **[LIVE]** M-B verification on cmr1 (Scenario A, quickstart §A):
+- [x] T014 **[LIVE]** M-B verification on cmr1 (Scenario A, quickstart §A):
   S1-only boot; collectors dispatched inside first five minutes before
   offensive units; guards over resource ships; steady game-time cadence; zero
   invalid commands at the game boundary; recorder trail complete; replay of
   the segment from recorder alone. Evidence recorded (SC-001, SC-002)
-  *Progress 2026-10-23: live rounds on `ai-cash-inject` (fast S1 endpoint
+  *Done 2026-10-23: live rounds on `ai-cash-inject` (fast S1 endpoint
   192.168.1.106:9931 qwen3.8-27B, thinking off, ~1-5s/tick): bind → cadence
   ticks (1s game time) → economy + S1 issuing guard/build/tactics/harvest/
   move; validation ok-rate 93→100% (fresh round, zero rejections); all 10
@@ -180,7 +180,7 @@ live: Scenarios B+D.
   S2 never binds; interface down → both idle; budget breach → channel reset
   discipline + `breach` + `degradation` lines. Tests: every matrix row
   (FR-024, US4)
-- [ ] T020 **[LIVE]** M-C verification on cmr1 (Scenarios B+C, quickstart):
+- [x] T020 **[LIVE]** M-C verification on cmr1 (Scenarios B+C, quickstart):
   scheduled pulses on cadence + out-of-cycle P0 pulse; packet applies at tick
   boundary with version bump; doctrine change within one pulse past evidence
   threshold; no primary-enemy oscillation inside hold time; invalid packets

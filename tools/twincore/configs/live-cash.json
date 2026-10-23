@@ -33,7 +33,7 @@
   "cadence": {
     "tick_ticks": 16,
     "combat_gate_multiplier": 3,
-    "pulse_ticks": 900,
+    "pulse_ticks": 480,
     "p0_wake": true
   }
 }

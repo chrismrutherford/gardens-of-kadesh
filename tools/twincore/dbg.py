@@ -34,11 +34,23 @@ def j(v):
 
 
 def state_payload(row):
-    return row.get("payload", {})
+    """Queue.scan nests the payload; flatten for display (recorder.scan
+    shape compatibility)."""
+    p = row.get("payload", {})
+    if isinstance(p, str):
+        try:
+            p = json.loads(p)
+        except ValueError:
+            p = {"raw": p}
+    return dict(row, **p) if isinstance(p, dict) else row
+
+
+def rows_flat(q, match, kinds=None):
+    return [state_payload(r) for r in q.scan(match, kinds=kinds)]
 
 
 def overview(q, match):
-    dg = q.scan(match, kinds=["digest"])
+    dg = rows_flat(q, match, ["digest"])
     print("MATCH %s" % match)
     if dg:
         last = dg[-1]
@@ -55,15 +67,15 @@ def overview(q, match):
                                       if i.get("outcome") == "open"])
     else:
         print("  (no digests yet)")
-    dec = q.scan(match, kinds=["decision"])
+    dec = rows_flat(q, match, ["decision"])
     if dec:
         last = dec[-1]
         print("  last decision: tick=%s mode=%s issued=%s" % (
             last.get("tick"), last.get("mode"), last.get("issued")))
-    cmds = q.scan(match, kinds=["command"])
+    cmds = rows_flat(q, match, ["command"])
     print("  commands    : %s" % j(dict(Counter(c.get("tool")
                                                 for c in cmds))))
-    vals = q.scan(match, kinds=["validation"])
+    vals = rows_flat(q, match, ["validation"])
     ok = sum(1 for v in vals if v.get("status") == "ok")
     if vals:
         print("  validation  : %d/%d ok" % (ok, len(vals)))
@@ -71,14 +83,14 @@ def overview(q, match):
         for r in rej[-3:]:
             print("    REJ %s %s | %s" % (r.get("tool"), r.get("reason"),
                                           str(r.get("message"))[:80]))
-    deg = q.scan(match, kinds=["degradation"])
+    deg = rows_flat(q, match, ["degradation"])
     if deg:
         last = deg[-1]
         print("  last state  : %s → %s (%s)" % (
             last.get("from"), last.get("to"), last.get("reason")))
-    bre = q.scan(match, kinds=["breach"])
+    bre = rows_flat(q, match, ["breach"])
     print("  breaches    : %d" % len(bre))
-    ev = q.scan(match, kinds=["delta"])
+    ev = rows_flat(q, match, ["delta"])
     ticks = sorted({d.get("tick") for d in ev})
     print("  delta ticks : %s..%s (%d deltas)" % (
         j(ticks[0]) if ticks else "-", j(ticks[-1]) if ticks else "-",
@@ -95,7 +107,7 @@ def state(q, match):
         print("bank", projs.get("bank"), "| income", projs.get("income"),
               "| own_units", projs.get("own_units"),
               "| threat", projs.get("threat_estimate"))
-    cmds = q.scan(match, kinds=["command"])
+    cmds = rows_flat(q, match, ["command"])
     if cmds:
         last = state_payload(cmds[-1])
         print("last command : %s %s @tick %s (%s)" % (
@@ -170,7 +182,7 @@ def main():
         overview(q, a.match)
         if a.tail or a.kinds:
             kinds = a.kinds.split(",") if a.kinds else None
-            rows = q.scan(a.match, kinds=kinds)
+            rows = rows_flat(q, a.match, kinds)
             for r in rows[-a.tail:]:
                 print("%s %-6s %-16s %s" % (
                     r.get("tick"), r.get("kind"), r.get("channel"),

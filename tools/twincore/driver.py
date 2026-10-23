@@ -275,6 +275,11 @@ class Driver:
                 landed, res = self.s2_loop.harvest_pulse(last)
             except LLMError as e:
                 self._transition(self.DEGRADED_S2_DOWN, str(e))
+            except Exception as e:
+                # strategist-lane bug: the seat survives, the gap shows
+                # (strategist is game-inert; FR-024 spirit)
+                self.recorder.record("decision", tick=last, mode="s2_gap",
+                                     reason=str(e))
             else:
                 if landed and self.state == self.DEGRADED_S2_DOWN:
                     self._transition(self.BOUND_ACTIVE, "s2 recovered")
@@ -329,6 +334,11 @@ class Driver:
                 line["event_kind"] = line.pop("kind")
                 self.recorder.record("classification", **line)
                 if c["class"] == "P0" and c.get("rule") != "match_over":
+                    open_kinds = {i.get("kind") for i in
+                                  self._digest_state["p0"]
+                                  if i.get("outcome") == "open"}
+                    if c["rule"] in open_kinds:
+                        continue  # already tracked open — no dup storm
                     self._digest_state["p0"].append(
                         {"tick": c.get("tick"), "kind": c["rule"],
                          "detail": c.get("detail"), "outcome": "open"})

@@ -48,11 +48,18 @@ PACKET_EXAMPLE = (
     'doctrine.harass_cadence.interval_ticks | '
     'doctrine.harass_cadence.standoff | '
     'doctrine.aggression.overkill_factor | doctrine.recall_thresholds | '
-    'doctrine.defence_tiers | attentions.topics\n'
+    'attentions.topics = {"economy": {"watch": true, "loudness": 1}} '
+    '(object mapping topic → {watch, loudness 0-2})\n'
     '# RULES\n'
     'primary_enemy changes need digest-evidence corroboration (sticky '
     'gate; uncited changes are dropped with an audit note). Cite ONLY '
-    'numbers present in MATCH STATE.'
+    'numbers present in MATCH STATE.\n'
+    '# VALUE SHAPES\n'
+    'primary_enemy = a NUMERIC player id (0-7, e.g. 1) or null — never a '
+    'name string. To PIN a new primary enemy: propose the SAME numeric id '
+    'consistently across pulses; corroborations accumulate (evidence ≥2 '
+    'distinct pulses + the hold time) after which the pin applies. '
+    'Non-cited or non-numeric changes are dropped with an audit note.\n'
 )
 
 STATIC_CHARTER = CHARTER + "\n\n" + PACKET_EXAMPLE
@@ -83,6 +90,7 @@ class S2PulseLoop:
         self._last_call = 0
         self._worker = None                  # async pulse thread (US2-3)
         self._pending_out = None
+        self._last_reject_reason = None
         self._pulse_started_at = None
 
     # -- scheduling (game time only, FR-019) ----------------------------------
@@ -120,10 +128,13 @@ class S2PulseLoop:
                                observed_tick)
         answers = self._answers_for_next
         digests = list(self.digests[-self.window_pulses:])  # M window
+        last_reject = self._last_reject_reason
 
         def render_with(dgs):
             mutable = "\n\n".join([
                 "# PINNED\n" + _pinned_text(pinned),
+                "# LAST PACKET OUTCOME\n%s" % (
+                    last_reject or "(last packet applied or none sent)"),
                 "# PROJECTIONS\n" + _projections_text(view),
                 "# OWN LAST PACKET\n" + _json(self._last_packet or {}),
                 "# PENDING ANSWERS\n" + _answers_text(answers),
@@ -187,6 +198,13 @@ class S2PulseLoop:
             return {"ok": False, "error": err, "applied": []}
 
         import twincore.packet as PK
+        # D9 corroboration (shared by both pulse paths)
+        proposed_enemy = ((packet.get("directive") or {}).get("patch")
+                          or {}).get("primary_enemy")
+        if isinstance(proposed_enemy, int) and proposed_enemy != \
+                (self.directive or {}).get("primary_enemy"):
+            self.sticky.corroborate(proposed_enemy,
+                                    pulse_id=self._last_call)
         res = PK.apply_packet(
             packet, self.directive or self._directive_from_ledger(),
             self.ledger, self.sticky, tick=observed_tick, pulse_id=observed_tick)
@@ -240,20 +258,32 @@ class S2PulseLoop:
         packet = packet_out.get("packet")
         if packet is None:
             err = packet_out.get("error") or "no packet"
+            self._last_reject_reason = "packet_rejected: %s" % err
             self.recorder.record("packet_rejected", tick=observed_tick,
                                  reason=err)
             return True, {"ok": False, "error": err, "applied": []}
         import twincore.packet as PK
-        if units(K.packet_json(packet)) > self.s2_out:
+        packet_size = units(PK.packet_json(packet))
+        if packet_size > self.s2_out:
             self.recorder.record("breach", tick=observed_tick,
-                                 channel="s2_out",
-                                 observed=units(K.packet_json(packet)),
+                                 channel="s2_out", observed=packet_size,
                                  **{"max": self.s2_out})
             self.recorder.record("packet_rejected", tick=observed_tick,
                                  reason="packet exceeds s2_out budget")
+            self._last_reject_reason = \
+                "packet_rejected: exceeds s2_out budget"
             return True, {"ok": False,
                           "error": "packet exceeds s2_out budget",
                           "applied": []}
+        # D9: repeated proposals accumulate digest-driven corroboration —
+        # the strategist's own consistent requests ARE the evidence, and
+        # the gate (hold time) does the rest
+        proposed_enemy = ((packet.get("directive") or {}).get("patch")
+                          or {}).get("primary_enemy")
+        if isinstance(proposed_enemy, int) and proposed_enemy != \
+                (self.directive or {}).get("primary_enemy"):
+            self.sticky.corroborate(proposed_enemy,
+                                    pulse_id=self._last_call)
         res = PK.apply_packet(
             packet, self.directive or self._directive_from_ledger(),
             self.ledger, self.sticky, tick=observed_tick,
@@ -266,13 +296,21 @@ class S2PulseLoop:
 
     def _finalize_pulse(self, res, packet, observed_tick, started_at=None):
         if res["ok"]:
+            self._last_reject_reason = None
             self.directive = res["directive"]
             self._last_packet = packet
-            self.recorder.record("packet", tick=observed_tick,
-                                 pulse=self._last_call,
-                                 applied=res["applied"],
-                                 dropped=res["dropped"],
-                                 audits=res["audits"])
+            import twincore.packet as _PK
+            content = _PK.packet_json(packet)
+            self.recorder.record(
+                "packet", tick=observed_tick, pulse=self._last_call,
+                applied=res["applied"], dropped=res["dropped"],
+                audits=res["audits"], content=content[:4000])
+            if (packet.get("directive") or {}).get("patch"):
+                self.recorder.record(
+                    "revision", tick=observed_tick,
+                    directive_version=res["directive"].get("version"),
+                    patch=packet["directive"]["patch"],
+                    content=content[:4000])
             if res["questions"]:
                 self._answer_queue = list(res["questions"])
                 self.recorder.record(
@@ -280,6 +318,8 @@ class S2PulseLoop:
                     questions=list(res["questions"]))
             self._prepare_answers()
         else:
+            self._last_reject_reason = ("packet_rejected: %s"
+                                        % res.get("rejected_reason"))
             self.recorder.record("packet_rejected", tick=observed_tick,
                                  reason=res.get("rejected_reason"))
         self._last_call += 1
