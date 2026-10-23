@@ -11,6 +11,7 @@ Transport retries are the SDK's (max_retries=1); any channel failure
 becomes LLMError.
 """
 import json
+import os
 
 from openai import OpenAI
 
@@ -38,6 +39,20 @@ def _usage_of(usage):
     return {"prompt": usage.prompt_tokens,
             "completion": usage.completion_tokens,
             "total": usage.total_tokens}
+
+
+S2_IO_PATH = os.environ.get("V4_S2_IO_LOG") or "/tmp/s2-io.log"
+
+
+def _s2io(text):
+    """Live S2 stream tap (observability-only): append + flush per delta
+    so a human can tail GLM's reasoning AS it happens."""
+    try:
+        with open(S2_IO_PATH, "a") as fh:
+            fh.write(text)
+            fh.flush()
+    except Exception:
+        pass
 
 
 def _message_extras(message):
@@ -184,6 +199,8 @@ class S2Channel:
         calls_acc, finish = {}, None
         usage = {}
         stream_err = None
+        _s2io("\n\n=== S2 STREAM | live ===\n[REASONING]\n")
+        saw_content = [False]
         try:
             for chunk in stream:
                 u = getattr(chunk, "usage", None)
@@ -198,10 +215,15 @@ class S2Channel:
                     c = getattr(d, "content", None)
                     if c:
                         content.append(c)
+                        if not saw_content[0]:
+                            _s2io("\n[CONTENT]\n")
+                            saw_content[0] = True
+                        _s2io(str(c))
                     m = getattr(d, "model_extra", None) or {}
                     r = m.get("reasoning_content") or m.get("reasoning")
                     if r:
                         reasoning.append(r)
+                        _s2io(str(r))
                     for tc in (getattr(d, "tool_calls", None) or []):
                         idx = getattr(tc, "index", 0)
                         slot = calls_acc.setdefault(
@@ -219,6 +241,7 @@ class S2Channel:
                     finish = f
         except Exception as e:      # mid-stream drop: FR-012, rescue below
             stream_err = "stream interrupted: %s" % e
+        _s2io("\n[end of stream]\n")
         if stream_err is None and finish is None and not content \
                 and not reasoning and not usage and not calls_acc:
             # streaming 4xx/5xx: the SDK ends the stream SILENTLY (no
