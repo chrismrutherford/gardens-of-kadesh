@@ -274,6 +274,21 @@ class PulseLoop:
 
     # -- the channel call (worker body; ≤1 bounded repair) ----------------
     def _call(self, msgs, tick):
+        try:
+            self._call_inner(msgs, tick)
+        except Exception as e:   # worker crash → visible failure, never a
+            # ghost pulse (FR-012: every transition recorded)
+            self._wake = False
+            self._result = {"ok": False, "program": None,
+                            "error": "pulse worker crashed: %s" % e,
+                            "tick": tick, "pulse": self._pulse_count}
+            if self.recorder:
+                self.recorder.record("packet_rejected", tick=tick,
+                                     reason=self._result["error"],
+                                     pulse=self._pulse_count)
+        return self._result
+
+    def _call_inner(self, msgs, tick):
         attempts = 1 + max(0, int(self.max_repairs))
         reason = None
         for attempt in range(1, attempts + 1):
