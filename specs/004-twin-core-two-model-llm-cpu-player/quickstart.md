@@ -23,7 +23,8 @@ python3 tools/twincore/driver.py --config tools/twincore/configs/boot-default.js
 # strategist.enabled = false in boot-default.json
 ```
 
-Expect (recorder `output/twincore-recordings/<match>/`):
+Expect (record store: postgres `twincore_q.messages`, query via
+`python3 tools/twincore/dbg.py --match <match_id>`):
 
 1. `degradation: UNBOUND→BOUND_ACTIVE` on bind; exactly one binding owner.
 2. Opening playbook: collectors dispatched to harvest inside the first five
@@ -76,7 +77,8 @@ python3 tools/twincore/harness.py --opponent builtin --difficulty intermediate -
 python3 tools/twincore/harness.py --opponent builtin --difficulty advanced --matches 3
 ```
 
-Expect one `output/twincore-reports/.../report.md` per series with win/loss
+Expect one report per series (`--out` default: stdout
++ one postgres `harness_log` record per series) with win/loss
 shape, opening adherence, P0 next-tick rate, cadence/budget adherence
 (observed vs configured), rejection/clamp rates, digest volumes, and any
 degradation events. SC-006 reads these reports.

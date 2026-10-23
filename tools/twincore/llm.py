@@ -97,29 +97,68 @@ class S1Channel:
         return _tool_calls_of(message), _usage_of(body)
 
 
+def _extract_json_object(text):
+    """Robust JSON object extraction: direct parse → fenced block → first
+    balanced {...} (strategist models sometimes wrap or prefix)."""
+    t = (text or "").strip()
+    if t.startswith("```"):
+        t = t.split("```")[1]
+        if t.startswith(("json", "JSON")):
+            t = t[4:]
+        t = t.strip()
+    for candidate in (t,):
+        try:
+            return json.loads(candidate)
+        except (ValueError, TypeError):
+            pass
+    # first balanced braced object
+    start = t.find("{")
+    while start != -1:
+        depth = 0
+        for i in range(start, len(t)):
+            ch = t[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(t[start:i + 1])
+                    except (ValueError, TypeError):
+                        break
+        start = t.find("{", start + 1)
+    return None
+
+
 class S2Channel:
-    """Strategist channel: structured JSON output (D6)."""
+    """Strategist channel: structured JSON output (D6).
+
+    max_output = the DELIVERABLE packet budget (enforced after parsing —
+    thinking models spend tokens on reasoning_content first, so the HTTP
+    request needs headroom: request_max_tokens, default 4x)."""
 
     def __init__(self, url, model="", max_output=2048, timeout=120.0,
-                 temperature=0.4, thinking=None):
+                 temperature=0.4, thinking=None, request_max_tokens=None):
         self.url = url
         self.model = model
         self.max_output = max_output
         self.temperature = temperature
         self.timeout = timeout
         self.thinking = thinking
+        self.max_tokens = request_max_tokens or max_output * 4
 
     def propose(self, messages):
         """→ ({"packet": dict|None, "error": str?}, usage)."""
         payload = {
             "model": self.model,
             "messages": list(messages),
-            "max_tokens": self.max_output,
+            "max_tokens": self.max_tokens,
             "temperature": self.temperature,
             "response_format": {"type": "json_object"},
         }
         if self.thinking is False:
             payload["chat_template_kwargs"] = {"enable_thinking": False}
+            payload["thinking"] = {"type": "disabled"}  # GLM-style param
         try:
             body = _chat(self.url, payload, timeout=self.timeout)
         except LLMError as e:
@@ -127,13 +166,11 @@ class S2Channel:
         message = _first_choice(body)
         usage = _usage_of(body)
         text = message.get("content")
-        try:
-            packet = json.loads(text)
-        except (ValueError, TypeError):
+        packet = _extract_json_object(text)
+        if packet is not None and not isinstance(packet, dict):
+            packet = None
+        if packet is None:
             return ({"packet": None,
-                     "error": "unparseable JSON from strategist"},
-                    usage)
-        if not isinstance(packet, dict):
-            return ({"packet": None,
-                     "error": "strategist JSON must be an object"}, usage)
+                     "error": "unparseable JSON from strategist: %r"
+                              % ((text or "")[:200])}, usage)
         return {"packet": packet}, usage

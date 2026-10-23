@@ -1,10 +1,14 @@
-"""Spec 004 twin-core: append-only JSONL recorder (driver-runtime.md §1).
+"""Spec 004 twin-core: Postgres record store (T003 revised — FR-021/FR-030).
 
-One file per record kind under the match directory
-(`output/twincore-recordings/<match>/<kind>.jsonl`); every line carries the
-envelope {match_id, tick, wall_ts} (wall_ts observability-only — no gameplay
-decision may read it, contract/twin-core-protocol.md §6). In-memory ring for
-event_raw only. Replay: scan() with kind/tick filters (SC-007).
+The `twincore_q.messages` table IS the append-only match trail: no local
+files for messages or logging (user directive 2026-10-23; supersedes
+research D5). Every record(kind, tick, **payload) row carries the
+envelope {match_id, tick, wall_ts(=created_at)} + the payload jsonb, with
+`kind` columns + indexes replacing per-kind files. Replay = scan()/replay()
+filters (kinds, tick_range). event_raw additionally enters a bounded
+in-memory ring (cap 512). Postgres unavailability degrades: record() keeps
+the newest events in the ring, flags `degraded`, never raises — the match
+continues (FR-024 spirit; FR-030's no-gameplay-failure rule).
 """
 import itertools
 import json
@@ -15,83 +19,154 @@ import time
 KINDS = (
     "event_raw", "classification", "delta", "rollup", "digest", "packet",
     "packet_rejected", "revision", "decision", "command", "validation",
-    "usage", "breach", "degradation", "question",
+    "usage", "breach", "degradation", "question", "note",
 )
 
 RING_CAP = 512
 
 
-def _kind_file(name):
-    return "%s.jsonl" % name
+def now_ms():
+    return int(time.time() * 1000)
+
+DEFAULT_DSN = {
+    "host": os.environ.get("TWINCORE_PG_HOST", "192.168.1.152"),
+    "dbname": os.environ.get("TWINCORE_PG_DB", "twincore_q"),
+    "user": os.environ.get("TWINCORE_PG_USER", "postgres"),
+    "connect_timeout": 5,
+}
 
 
-def scan(match_dir, kinds=None, tick_range=None):
-    """Replay a recorded match segment: kind/tick filters over all kind files.
-
-    Returns records sorted by tick (SC-007 reconstructable, offline).
-    """
-    if kinds is None:
-        kinds = list(KINDS)
-    out = []
-    for kind in kinds:
-        path = os.path.join(match_dir, _kind_file(kind))
-        if not os.path.isfile(path):
-            continue
-        with open(path, encoding="utf-8") as fh:
-            for line in fh:
-                line = line.strip()
-                if not line:
-                    continue
-                rec = json.loads(line)
-                if tick_range is not None:
-                    lo, hi = tick_range
-                    if not (lo <= rec["tick"] <= hi):
-                        continue
-                out.append(rec)
-    return sorted(out, key=lambda r: (r["tick"], r.get("_seq", 0)))
+def _kind_file(name):  # legacy name kept for the record-shape contract notes
+    return name
 
 
 class Recorder:
-    """Append-only match artefact store (FR-021)."""
+    """Append-only match trail writer (the queue table is the store)."""
 
-    def __init__(self, match_dir, match_id, ring_cap=RING_CAP):
-        self.match_dir = match_dir
+    def __init__(self, match_id, dsn=None, ring_cap=RING_CAP,
+                 match_dir_removed=None):
         self.match_id = match_id
         self.ring_cap = ring_cap
-        self._lock = threading.Lock()
+        self.dsn = dict(DEFAULT_DSN if dsn is None else dsn)
+        self.degraded = False
+        self.dropped = 0
+        self._conn = None
         self._ring = []
         self._seq = itertools.count()
-        os.makedirs(match_dir, exist_ok=True)
 
+    # -- connection (resilient) ------------------------------------------------
+    def _connect(self):
+        if self._conn is not None and getattr(self._conn, "closed", 1) == 0:
+            return self._conn
+        import psycopg2
+        self._conn = psycopg2.connect(**self.dsn)
+        self._conn.autocommit = True
+        return self._conn
+
+    def close(self):
+        try:
+            if self._conn is not None and self._conn.closed == 0:
+                self._conn.close()
+        except Exception:
+            pass
+        self._conn = None
+
+    # -- writes -----------------------------------------------------------------
     def record(self, kind, tick=None, **payload):
-        """Append one record of `kind`; event_raw also enters the ring."""
+        """Append one record (envelope + payload). Postgres down: ring +
+        degraded flag, no raise (FR-030)."""
         if kind not in KINDS:
             raise ValueError("unknown recorder kind: %r" % (kind,))
         line = {
             "match_id": self.match_id,
-            "tick": 0 if tick is None else tick,
+            "tick": int(tick if tick is not None else 0),
+            "kind": kind,
             "wall_ts": time.time(),
-            "_seq": next(self._seq),
         }
         line.update(payload)
-        with self._lock:
-            with open(os.path.join(self.match_dir, _kind_file(kind)),
-                      "a", encoding="utf-8") as fh:
-                fh.write(json.dumps(line, sort_keys=True) + "\n")
-            if kind == "event_raw":
-                self._ring.append(payload)
-                if len(self._ring) > self.ring_cap:
-                    del self._ring[:len(self._ring) - self.ring_cap]
+        # general in-memory fall-back (cap'd): primary record store is
+        # postgres; the ring guarantees degraded-mode replay of the tail
+        self._ring.append(line)
+        if len(self._ring) > self.ring_cap:
+            del self._ring[:len(self._ring) - self.ring_cap]
+        self._insert(kind, line)
         return line
 
+    def _insert(self, kind, line):
+        import psycopg2.extras
+        try:
+            conn = self._connect()
+            with conn.cursor() as cur:
+                cur.execute(
+                    "insert into messages (match_id, channel, sender,"
+                    " kind, tick, payload) values (%s,'recorder','driver',"
+                    " %s, %s, %s) returning created_at",
+                    (self.match_id, kind, line["tick"],
+                     json.dumps(line, sort_keys=True, default=str)))
+                created_at, = cur.fetchone()
+            line["wall_ts"] = created_at.timestamp()
+            self.degraded = False
+        except Exception:
+            self.degraded = True
+            self.dropped += 1   # counted; ring/other kinds still carry
+
+    # -- memory ring -------------------------------------------------------------
     def ring(self):
-        """Newest event_raw records (bounded, D5)."""
         return list(self._ring)
 
-    def close(self):
-        pass
+    # -- scans (replay contract SC-007) -------------------------------------------
+    def scan(self, kinds=None, tick_range=None):
+        import psycopg2.extras
+        if self.degraded:
+            return [dict(r) for r in self._ring if _kind_ok(r, kinds,
+                                                            tick_range)]
+        try:
+            conn = self._connect()
+        except Exception:
+            self.degraded = True
+            return [dict(r) for r in self._ring if _kind_ok(r, kinds,
+                                                            tick_range)]
+        sql = ("select match_id, tick, created_at, kind, payload from"
+               " messages where match_id = %s")
+        args = [self.match_id]
+        if kinds:
+            sql += " and kind = any(%s)"
+            args.append(list(kinds))
+        if tick_range is not None:
+            lo, hi = tick_range
+            sql += " and tick between %s and %s"
+            args.extend([lo, hi])
+        sql += " order by id"
+        out = []
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) \
+                as cur:
+            cur.execute(sql, tuple(args))
+            for row in cur.fetchall():
+                payload = row["payload"]
+                row = dict(payload, match_id=row["match_id"],
+                           tick=row["tick"], kind=row["kind"],
+                           wall_ts=row["created_at"].timestamp())
+                out.append(row)
+        return out
 
 
-def replay(match_dir, kinds=None, tick_range=None):
+def _kind_ok(row, kinds, tick_range):
+    kinds_ok = kinds is None or row.get("kind") in kinds
+    if tick_range is not None:
+        lo, hi = tick_range
+        return kinds_ok and lo <= row.get("tick", 0) <= hi
+    return kinds_ok
+
+
+def scan(match_id, kinds=None, tick_range=None):
+    """Module-level replay: one match's trail filtered (SC-007)."""
+    rec = Recorder(match_id)
+    try:
+        return rec.scan(kinds=kinds, tick_range=tick_range)
+    finally:
+        rec.close()
+
+
+def replay(match_id, kinds=None, tick_range=None):
     """Alias kept for contract §6 replay wording."""
-    return scan(match_dir, kinds=kinds, tick_range=tick_range)
+    return scan(match_id, kinds=kinds, tick_range=tick_range)

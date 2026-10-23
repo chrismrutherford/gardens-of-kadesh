@@ -65,7 +65,10 @@ DEFAULTS = {
         "build_split": {"attack": 30, "defence": 30, "economy": 40},
         "income_target_percent": 100,
     },
-    "recorder": {"dir": "output/twincore-recordings"},
+    "recorder": {"dsn": {"host": "192.168.1.152", "dbname": "twincore_q",
+                         "user": "postgres",
+                         "connect_timeout": 5}},  # postgres record store
+                                                   # (FR-021/FR-030; no files)
     "strategist": {"enabled": False},
     "difficulty": DEFAULT_DIFFICULTY,
 }

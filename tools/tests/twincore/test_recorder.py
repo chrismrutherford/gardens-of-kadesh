@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
-"""Spec 004 tests: tools/twincore/recorder.py.
+"""Spec 004 tests: tools/twincore/recorder.py — postgres record store.
 
-Covers: append-only JSONL per kind (protocol §6), mandatory line envelope
-{match_id, tick, wall_ts}, event_raw ring cap (512), kind/tick replay filters,
-append across reopen (no truncation). FR-021, SC-007.
+Envelope {match_id, tick, wall_ts}, kind rows, ring cap 512 for event_raw,
+kind/tick replay filters (SC-007), append across reopen, degraded-mode
+no-raise. FR-021 (amended: postgres store, no local files).
 """
-import glob
-import json
+import json as J
 import os
 import sys
+import time
 import tempfile
 import unittest
 
@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(__file__), "..", "..", "twincore"))
 
 import twincore.recorder as R  # noqa: E402
+import twincore.queue as Q  # noqa: E402
 
 ALL_KINDS = [
     "event_raw", "classification", "delta", "rollup", "digest", "packet",
@@ -24,90 +25,121 @@ ALL_KINDS = [
     "usage", "breach", "degradation", "question",
 ]
 
+HOST = os.environ.get("TWINCORE_PG_HOST", "192.168.1.152")
+DSN = {"host": HOST, "dbname": "twincore_q", "user": "postgres",
+       "connect_timeout": 5}
 
+
+def reachable():
+    try:
+        import psycopg2
+        c = psycopg2.connect(**DSN)
+        c.close()
+        return True
+    except Exception:
+        return False
+
+
+@unittest.skipUnless(reachable(), "twincore_q postgres unreachable")
 class TestRecorder(unittest.TestCase):
     def setUp(self):
-        self.dir = tempfile.mkdtemp(prefix="twincore-rec-")
-        self.rec = R.Recorder(self.dir, match_id="m1")
+        self.match = "test-recorder-%d" % (time.time() * 1000)
+        self.rec = R.Recorder(self.match)
 
     def tearDown(self):
+        Q.Queue(DSN).delete_match(self.match)
         self.rec.close()
 
-    def _lines(self, kind, match_dir=None):
-        path = os.path.join(match_dir or self.dir, kind + ".jsonl")
-        with open(path, encoding="utf-8") as fh:
-            return [json.loads(l) for l in fh if l.strip()]
-
-    def test_record_kinds_partition(self):
+    def test_record_kinds_partitioned(self):
         for kind in ALL_KINDS:
             self.rec.record(kind, tick=1, note=kind)
         for kind in ALL_KINDS:
-            lines = self._lines(kind)
-            self.assertEqual(len(lines), 1, kind)
-            self.assertEqual(lines[0]["note"], kind)
+            rows = self.rec.scan(kinds=[kind])
+            self.assertEqual(len(rows), 1, kind)
+            self.assertEqual(rows[0]["note"], kind)
+            self.assertEqual(rows[0]["kind"], kind)
 
     def test_envelope_fields(self):
         self.rec.record("decision", tick=42, choice="attack")
-        (line,) = self._lines("decision")
-        self.assertEqual(line["match_id"], "m1")
+        (line,) = self.rec.scan(kinds=["decision"])
+        self.assertEqual(line["match_id"], self.match)
         self.assertEqual(line["tick"], 42)
         self.assertIn("wall_ts", line)
         self.assertEqual(line["choice"], "attack")
 
     def test_payloadless_record_ok(self):
         self.rec.record("decision", tick=7)
-        (line,) = self._lines("decision")
+        (line,) = self.rec.scan(kinds=["decision"])
         self.assertEqual(
-            set(line) - {"match_id", "tick", "wall_ts", "_seq"}, set())
+            set(line) - {"match_id", "tick", "wall_ts", "kind"}, set())
 
-    def test_ring_cap_event_raw_only(self):
-        rec = R.Recorder(self.dir, match_id="m1", ring_cap=3)
+    def test_ring_cap(self):
+        # general fall-back ring (cap 512, oldest evicted)
+        for i in range(5):
+            self.rec.record("event_raw", tick=i, i=i)
+        self.rec.record("decision", tick=100)
+        self.assertEqual(len(self.rec.ring()), 6)
+        rec = R.Recorder(self.match, ring_cap=3)
         try:
             for i in range(5):
                 rec.record("event_raw", tick=i, i=i)
-            rec.record("decision", tick=100)
-            self.assertEqual(len(rec.ring()), 3)
             self.assertEqual([e["i"] for e in rec.ring()], [2, 3, 4])
-            self.assertEqual(len(self._lines("decision")), 1)
         finally:
             rec.close()
 
-    def test_replay_kind_filter(self):
+    def test_replay_filters(self):
         self.rec.record("decision", tick=1, a=1)
         self.rec.record("command", tick=2, cmd="move")
         self.rec.record("decision", tick=3, a=2)
-        got = R.scan(self.dir, kinds=["decision"])
+        got = self.rec.scan(kinds=["decision"])
         self.assertEqual([g["a"] for g in got], [1, 2])
-        got = R.scan(self.dir, kinds=["decision"], tick_range=(3, 10))
+        got = self.rec.scan(kinds=["decision"], tick_range=(3, 10))
         self.assertEqual([g["a"] for g in got], [2])
 
-    def test_replay_tick_filter(self):
-        self.rec.record("digest", tick=10, d=True)
-        self.rec.record("digest", tick=20, d=False)
-        got = R.scan(self.dir, kinds=["digest"], tick_range=(10, 19))
-        self.assertEqual([g.get("d") for g in got], [True])
-
-    def test_append_no_truncate_on_reopen(self):
+    def test_append_across_reopen(self):
         self.rec.record("usage", tick=1, ch="s1")
         self.rec.close()
-        self.rec = R.Recorder(self.dir, match_id="m1")
+        self.rec = R.Recorder(self.match)
         self.rec.record("usage", tick=2, ch="s2")
-        lines = self._lines("usage")
-        self.assertEqual([l["ch"] for l in lines], ["s1", "s2"])
+        rows = self.rec.scan(kinds=["usage"])
+        self.assertEqual([l["ch"] for l in rows], ["s1", "s2"])
 
-    def test_flush_per_line_and_files_list(self):
-        self.rec.record("breach", tick=1, ch="s1_out")
-        files = sorted(os.path.basename(p)
-                       for p in glob.glob(os.path.join(self.dir, "*.jsonl")))
-        self.assertEqual(files, ["breach.jsonl"])
+    def test_module_scan_helper(self):
+        self.rec.record("digest", tick=10, d=True)
+        got = R.scan(self.match, kinds=["digest"], tick_range=(10, 19))
+        self.assertEqual([g.get("d") for g in got], [True])
 
     def test_invalid_kind_rejected(self):
         with self.assertRaises(ValueError):
             self.rec.record("nonsense_kind", tick=1)
 
     def test_unknown_kind_scan_is_empty(self):
-        got = R.scan(self.dir, kinds=["digest"])
-        self.assertEqual(got, [])
+        self.assertEqual(self.rec.scan(kinds=["digest"]), [])
+
+
+class TestDegradedMode(unittest.TestCase):
+    """FR-030: postgres down → ring + degraded flag; never a raise."""
+
+    def setUp(self):
+        self.match = "test-degraded-%d" % (time.time() * 1000)
+
+    def tearDown(self):
+        try:
+            Q.Queue(DSN).delete_match(self.match)
+        except Exception:
+            pass
+
+    def test_record_survives_db_down(self):
+        rec = R.Recorder(self.match, dsn={"host": "127.0.0.1", "port": 59999,
+                                          "dbname": "x", "user": "x",
+                                          "connect_timeout": 1})
+        rec.record("event_raw", tick=1, i=1)
+        self.assertTrue(rec.degraded)
+        self.assertEqual(rec.dropped, 1)
+        rec.record("decision", tick=2)
+        self.assertTrue(rec.degraded)
+        got = rec.scan(kinds=["decision"])
+        self.assertEqual(len([g for g in got if g.get("tick") == 2]), 1)
 
 
 if __name__ == "__main__":

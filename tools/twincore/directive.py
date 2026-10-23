@@ -142,7 +142,8 @@ def make_standing_order(id, verb, subject, priority=0, ttl_ticks=3600,
 
 ALLOWED_PATCH_PATHS = (
     "primary_enemy",
-    "build_split.attack", "build_split.defence", "build_split.economy",
+    "build_split", "build_split.attack", "build_split.defence",
+    "build_split.economy",
     "doctrine.defence_tiers",
     "doctrine.harass_cadence.interval_ticks",
     "doctrine.harass_cadence.standoff",

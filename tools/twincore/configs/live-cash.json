@@ -21,14 +21,19 @@
       "max_context": 24576,
       "max_output": 2048,
       "temperature": 0.4,
-      "timeout_seconds": 180
+      "timeout_seconds": 300,
+      "thinking": false,
+      "max_tokens": 4096
     }
   },
   "difficulty": "intermediate",
   "strategist": {
-    "enabled": false
+    "enabled": true
   },
-  "recorder": {
-    "dir": "output/twincore-recordings"
+  "cadence": {
+    "tick_ticks": 16,
+    "combat_gate_multiplier": 3,
+    "pulse_ticks": 900,
+    "p0_wake": true
   }
 }

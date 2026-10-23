@@ -107,15 +107,15 @@ class DriverHarness(unittest.TestCase):
                                "recorder": {"dir": self.dir}})
         self.client = FakeClient()
         self.drv = D.Driver(cfg, client=self.client,
-                            match_id="test-match")
+                            match_id="test-match-%d" % __import__("time").time_ns())
 
     def degradation_lines(self):
         import twincore.recorder as R
-        return R.scan(self.drv.recorder.match_dir, kinds=["degradation"])
+        return self.drv.recorder.scan(kinds=["degradation"])
 
     def delta_records(self):
         import twincore.recorder as R
-        return R.scan(self.drv.recorder.match_dir, kinds=["delta"])
+        return self.drv.recorder.scan(kinds=["delta"])
 
     def test_bind_transition_recorded(self):
         self.drv.bind()
@@ -182,7 +182,7 @@ class TestS1Wiring(unittest.TestCase):
             {"seat": {"player_index": 0}, "recorder": {"dir": self.dir}})
         self.client = FakeClient()
         self.drv = D.Driver(self.cfg, client=self.client,
-                            match_id="test-s1")
+                            match_id="test-s1-%d" % __import__("time").time_ns())
         self.ticks = []
         self.drv.s1_loop = _FakeS1Loop(self.ticks)
         self.drv.ledger = _FakeLedger()
@@ -223,7 +223,7 @@ class TestS1Wiring(unittest.TestCase):
         self.assertEqual(self.drv.state, "BOUND_ACTIVE")
 
     def test_idle_when_unconfigured(self):
-        drv = D.Driver(self.cfg, client=FakeClient(), match_id="x")
+        drv = D.Driver(self.cfg, client=FakeClient(), match_id="x-%d" % __import__("time").time_ns())
         drv.bind()
         drv.step()   # no s1_loop wired: seat simply doesn't act (no crash)
 

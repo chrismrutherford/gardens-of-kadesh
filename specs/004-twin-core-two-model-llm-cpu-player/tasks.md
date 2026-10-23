@@ -250,6 +250,25 @@ evidence (US5).
 # depend only on T008's ledger interface; T013 integrates all three.
 ```
 
+## Rider phase: postgres record store + exchange (FR-030; 2026-10-23)
+
+User directives driving this phase: (a) post the queue to 192.168.1.152 as a
+dual-purpose (log + realtime exchange) message store; (b) "postgres for all
+messages and logging" — NO local file logging. Recorded as decision +
+FR-021 amendment. research.md D5 amended accordingly.
+
+- [x] T028 `queue.py` exchange layer + `dbg.py` debug CLI; schema live in
+  `twincore_q` (messages: match_id/channel/sender/kind/tick/payload/
+  consumed/by/at; SKIP-LOCKED inbox; pg_notify listeners; command-kind
+  publishes REFUSED — FR-002). Tests: live-db suites (skip when host down) +
+  degraded-mode no-raise (in-memory ring keeps the tail)
+- [x] T029 recorder.py → Postgres-backed store (interface unchanged:
+  record/scan/replay; envelope {match_id, tick, wall_ts}; kind indexes
+  replace per-kind files); match ids UNIQUE per driver run; driver inbox
+  poll wired (wake → s2 wake; notes logged)
+- [x] T030 OPERATING.md v3 operation section + logbook snippet (dbg usage,
+  one-driver-per-seat rule, endpoint mapping notes)
+
 ## Implementation Strategy
 
 MVP = Phases 1-3 (M-A + M-B): a recording, degrading, S1-only CPU playing the

@@ -44,7 +44,10 @@ not imported (research D7).
   "budgets": {"digest_min": 300, "digest_max": 800, "s2_out": 2048, "s1_out": 200},
   "difficulty": "intermediate | advanced | beginner | custom",
   "economy": {"opening": {...}, "ratios": {...}},          // deterministic module tuning
-  "recorder": {"dir": "output/twincore-recordings/<match>"},
+  "recorder": {"dsn": {"host": "192.168.1.152", "dbname": "twincore_q",
+                       "user": "postgres"}},      // AMENDED: postgres IS
+                                                     // the record store
+                                                     // (FR-021/FR-030; no files)
   "strategist": {"enabled": true}                          // false ⇒ S1-only mode
 }
 ```

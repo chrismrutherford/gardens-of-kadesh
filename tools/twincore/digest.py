@@ -289,7 +289,10 @@ def rollup(deltas, interval_ticks=160):
     for d in deltas:
         for k in d.get("kinds") or []:
             n = d.get(k)
-            n = len(n) if isinstance(n, (list, dict)) else n
+            if isinstance(n, (list, dict, tuple)):
+                n = len(n)
+            elif isinstance(n, str):      # lifecycle markers etc.
+                n = 1
             kinds[k] = kinds.get(k, 0) + (n or 0)
     hist = {"P0": 0, "P1": 0, "P2": 0}
     for d in deltas:

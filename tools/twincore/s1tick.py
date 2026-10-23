@@ -71,6 +71,91 @@ class S1TickLoop:
         self._p0_items = []         # pinned P0 (digest P0Tracker output)
         self.rolling_rollups = []   # interval rollups (digest.py output)
         self.directive = boot_directive()
+        self._so_issued = {}         # standing order id → issued tick
+        self._suspended = {}         # id → reason (veto)
+        self._order_status = []      # feed for digests (bounded)
+        self._notes = []             # s1_notes feed (veto reports etc.)
+
+    # -- T018: history operations (S2 as S1's context manager) --------------
+    def history_op(self, op, tick=0):
+        """trim {scope: 'deltas'|'all'} oldest-first; reset: collapse the
+        rolling window to the seed — role card + directive + in-flight
+        orders survive; P0 items survive (FR-011c); recorded as a
+        decision line with history_op marker."""
+        if not isinstance(op, dict) or not op:
+            raise ValueError("history_op must be {trim:{scope}}|{reset:{}}")
+        if "trim" in op:
+            scope = (op.get("trim") or {}).get("scope", "deltas")
+            if scope in ("deltas", "all"):
+                self._rolling_deltas = []
+        elif "reset" in op:
+            self._rolling_deltas = []
+        self.recorder.record("decision", tick=tick, mode="history",
+                             history_op=("trim" if "trim" in op else
+                                         "reset"),
+                             in_flight=len(self.ledger.in_flight()))
+
+    # -- T018: standing-order lifecycle (TTL, veto, ally-abort) ---------------
+    def evaluate_standing_orders(self, observed_tick):
+        """Tick-boundary pass: expire TTLs in game time (0 = until
+        aborted); former-ally subjects abort with reason; vetoable orders
+        auto-suspend under open P0 emergency (MUST report — s1_notes)."""
+        orders = self.directive.get("standing_orders") or []
+        living, statuses = [], []
+        view = self.ledger.as_dict()
+        for o in orders:
+            oid = o.get("id")
+            if oid in self._suspended:
+                living.append(o)  # suspended stays recorded for reporting
+                continue
+            issued = self._so_issued.get(oid, observed_tick)
+            ttl = o.get("ttl_ticks", 0)
+            if ttl > 0 and observed_tick - issued >= ttl:
+                statuses.append({"order": oid, "status": "expired",
+                                 "tick": observed_tick})
+                self.recorder.record("decision", tick=observed_tick,
+                                     mode="standing_order_expired",
+                                     order=oid)
+                continue
+            ally_bad = _ally_subject(o, view, self.ledger)
+            if ally_bad:
+                statuses.append({"order": oid, "status": "aborted",
+                                 "reason": ally_bad,
+                                 "tick": observed_tick})
+                continue
+            if self._p0_items and o.get("veto", True):
+                self._suspended[oid] = ("veto: emergency P0 open"
+                                        " (auto-suspend)")
+                statuses.append({"order": oid, "status": "suspended",
+                                 "reason": self._suspended[oid],
+                                 "tick": observed_tick})
+                self._notes.append(
+                    "vetoed standing order %s under emergency (P0 open); "
+                    "order suspended, not abandoned" % oid)
+                continue
+            living.append(o)
+        self.directive["standing_orders"] = living
+        if statuses:
+            self._order_status.extend(statuses)
+            self.recorder.record("decision", tick=observed_tick,
+                                 mode="standing_orders",
+                                 **{"statuses": statuses})
+
+    def order_status_feed(self):
+        last = list(self._order_status)
+        self._order_status = []
+        return last
+
+    def s1_notes_feed(self):
+        last = list(self._notes)
+        self._notes = []
+        return last
+
+    def resume_suspended(self, oid, tick=None):
+        reason = self._suspended.pop(oid, None)
+        if reason:
+            self._notes.append("standing order %s resumed after veto "
+                               "(emergency closed)" % oid)
 
     # -- context assembly (protocol §1 fixed anatomy) ------------------------
     def assemble(self, tick, directive, p0=None, deltas=None,
@@ -172,7 +257,6 @@ class S1TickLoop:
         if isinstance(text_or_sections, str):
             return units(text_or_sections)
         return sum(units(t) for _, t in text_or_sections)
-
     _rollup_lines = []
 
     # -- the tick ----------------------------------------------------------------
@@ -306,6 +390,33 @@ def command_record(oid, tool, params, validation, directive_version,
         "outcome": "in-flight",
         "tick_issued": tick_issued, "tick_resolved": None,
     }
+
+
+def _ally_subject(order, view, ledger):
+    """Standing order targeting an ally's asset/subject → abort reason
+    (protocol §7: former-ally orders surface failed, never persist)."""
+    subject = order.get("subject") or {}
+    target = subject.get("target")
+    if isinstance(target, int) and target in [
+            _as_int(k) for k in (view.get("ships_all") or {})
+            if isinstance(k, int)]:
+        entry = (view.get("ships_all") or {}).get(target)
+        if isinstance(entry, dict) and ledger is not None:
+            owner = entry.get("owner")
+            if owner is not None and owner != _OWN_UNKNOWN and \
+                    ledger.is_allied(owner):
+                return "subject %s belongs to ally %s" % (target, owner)
+    return None
+
+
+_OWN_UNKNOWN = object()  # sentinel: unknown owners are not ally-claims
+
+
+def _as_int(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return None
 
 
 S1_WIN_MAX_LINES = 24

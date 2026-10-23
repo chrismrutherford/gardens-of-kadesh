@@ -66,17 +66,22 @@ save/load, and replay, violating determinism.
 
 ## D5. Recorder format
 
-**Decision**: append-only JSONL, one file per match
-(`output/twincore-recordings/<match>/<kind>.jsonl` partitioned by record kind),
-with an in-memory ring for raw events only. Replay = scan with kind/tick
-filters.
+**Decision (AMENDED 2026-10-23, user directive "postgres for all messages
+and logging")**: the record store IS Postgres — `twincore_q.messages` on
+192.168.1.152 (table `messages`: match_id, channel, sender, kind, tick,
+payload jsonb, created_at envelope; one row per record).
+`tools/twincore/recorder.py` is the SQL-backed store (interface unchanged:
+record/scan/replay, event ring 512 in memory); `tools/twincore/queue.py` is
+the exchange layer (inbox wake/note one-shot + pg_notify listeners). No
+local files for messages/logging; match ids unique per driver run.
+Replay: kind/tick SQL filters (SC-007). Postgres down ⇒ in-memory ring +
+degraded flag; the match continues (FR-024 spirit).
 
-**Rationale**: JSONL precedent exists (fleet telemetry decision #5, 2026-10-20:
-"SQLite rejected YAGNI"); partitioned-per-kind keeps replay scans trivial and
-the raw-event ring bounds memory. Sufficient for SC-007.
-
-**Alternatives**: sqlite (rejected: heavier than needed); binary log
-(rejected: no diffability, debug value lost).
+**Original decision (superseded)**: append-only JSONL per kind
+(fleet-telemetry precedent), sqlite rejected as heavier. The JSONL choice
+was correct for iteration-1 scale; spec 004 grows into a cross-process
+architecture (S1/S2/exchange/analyst) for which the shared queue-table
+doubles as the log.
 
 ## D6. Model serving contract
 

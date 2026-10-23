@@ -30,6 +30,10 @@ class _S1Down(RuntimeError):
     """S1 channel unusable → DEGRADED_S1_DOWN (FR-024): seat idles."""
 
 
+def _fresh_digest_state():
+    return {"p0": [], "rollups": [], "changes": [], "order_status": []}
+
+
 def _Ledger(own_player):
     try:
         return state_store.Ledger(own_player=own_player)
@@ -78,19 +82,38 @@ class Driver:
             Client(cfg.get("transport.mcp_url"))
         self.state = self.UNBOUND
         player = cfg.get("seat.player_index")
-        match = match_id or "seat%d" % player
-        base = cfg.get("recorder.dir") or "output/twincore-recordings"
+        # postgres record store (FR-021/FR-030): match id unique per RUN so
+        # restarts never interleave trails
+        match = match_id or "seat%d-%d" % (player, recorder.now_ms()
+                                           if hasattr(recorder, "now_ms")
+                                           else int(__import__("time").time()))
         self.recorder = recorder.Recorder(
-            os.path.join(base, match), match_id=match)
+            match_id=match,
+            dsn=cfg.get("recorder.dsn") or recorder.DEFAULT_DSN)
+        self.match_id = match
         self.consumer = events.DeltaConsumer()
         self.tick_clock = GameClock(cfg.get("cadence.tick_ticks"))
         self._match_over = False
+        self.pulse_seq = 0
+        self._last_pulse_tick = None
+        self._digest_state = _fresh_digest_state()
+        # exchange inbox (FR-030): polling wake/note one-shot; never a
+        # command path. Absent/degraded postgres → None (no mailbox).
+        import twincore.queue as _q
+        try:
+            self.queue = _q.Queue(cfg.get("recorder.dsn") or
+                                  recorder.DEFAULT_DSN)
+        except Exception:
+            self.queue = None
         # M-B wiring: ledger + S1 loop built from config when a channel URL
         # exists; injection point for tests/degradation runs (D10)
         self.ledger = None
         self.validator = None
         self.s1_loop = None
+        self.s2_loop = None
+        self.sticky_gate = None
         self._wire_s1()
+        self._wire_s2()
 
     def _wire_s1(self):
         from twincore.economy import EconomyManager
@@ -117,6 +140,37 @@ class Driver:
             interval_ticks=self.cfg.get("cadence.tick_ticks"),
             budget_in=self.cfg.get("budgets.s1_in"))
         return self.s1_loop
+
+    def _wire_s2(self):
+        """Strategist lane (M-C): S2 channel + sticky gate + digest window.
+        Wired only when strategist.enabled AND a channel URL exists."""
+        if self.s2_loop is not None or not self.cfg.get(
+                "strategist.enabled"):
+            return self.s2_loop
+        url = self.cfg.get("channels.s2.url")
+        if not url:
+            return None
+        import twincore.s2pulse as s2pulse
+        import twincore.llm as llm
+        from twincore.directive import StickyGate
+        self.sticky_gate = StickyGate(
+            evidence_min=self.cfg.get("sticky.evidence_min"),
+            hold_ticks=self.cfg.get("sticky.hold_ticks"), since_tick=0)
+        channel = llm.S2Channel(
+            url, model=self.cfg.get("channels.s2.model", ""),
+            max_output=self.cfg.get("channels.s2.max_output", 2048),
+            temperature=self.cfg.get("channels.s2.temperature", 0.4),
+            timeout=self.cfg.get("channels.s2.timeout_seconds", 120.0),
+            thinking=self.cfg.get("channels.s2.thinking"),
+            request_max_tokens=self.cfg.get("channels.s2.max_tokens"))
+        self.s2_loop = s2pulse.S2PulseLoop(
+            ledger=self.ledger, channel=channel, recorder=self.recorder,
+            sticky=self.sticky_gate,
+            pulse_ticks=self.cfg.get("cadence.pulse_ticks"),
+            window_pulses=self.cfg.get("digest.window_pulses"),
+            s2_in=self.cfg.get("budgets.s2_in"),
+            s2_out=self.cfg.get("budgets.s2_out"))
+        return self.s2_loop
 
     # -- lifecycle ---------------------------------------------------------
     def _transition(self, to, reason):
@@ -178,25 +232,67 @@ class Driver:
         if self.ledger:
             for d in merged:
                 self.ledger.apply_delta(d)
+        if reobserving:
+            self.recorder.record(
+                "decision", tick=self.client.last_tick or 0,
+                mode="reobserve",
+                note="ledger rebuilt; stale-id in-flight orders cleared "
+                     "(re-issued on demand, never assumed busy)")
 
-        # S1 lane: game-time cadence gate; S1 channel down → seat idles,
-        # but a DEGRADED_S1_DOWN seat keeps probing to recover (FR-024)
+        paused = bool(status.get("paused"))
+        last = self.client.last_tick or 0
+        self._poll_inbox(last)
+        if self.ledger:
+            self._classify_step(merged, last)
+        # S1 lane: game-time cadence gate; runs in BOUND_ACTIVE and
+        # DEGRADED_S2_DOWN (strategist down ⇒ S1 keeps last directive,
+        # FR-024); a DEGRADED_S1_DOWN seat keeps probing to recover
         if self.s1_loop is not None and \
-                self.state in (self.BOUND_ACTIVE, self.DEGRADED_S1_DOWN):
-            paused = bool(status.get("paused"))
-            last = self.client.last_tick or 0
+                self.state in (self.BOUND_ACTIVE, self.DEGRADED_S1_DOWN,
+                               self.DEGRADED_S2_DOWN):
             if self.tick_clock.ready(last, paused):
                 try:
                     self.s1_loop.run_tick(observed_tick=last,
                                           paused=paused)
                 except (LLMError, ChannelFailure) as e:
                     self._transition(self.DEGRADED_S1_DOWN, str(e))
-                    return merged
                 else:
                     if self.state == self.DEGRADED_S1_DOWN:
                         self._transition(self.BOUND_ACTIVE,
                                          "s1 recovered")
                     self.tick_clock.advance(last)
+                    if self.state == self.BOUND_ACTIVE:
+                        self._post_tick(last)
+
+        # S2 lane (async two-phase, US2-3): harvest any landed packet FIRST,
+        # then spawn when due. Cadence anchors at SPAWN (a failed/lagging
+        # call cannot re-due the same boundary → no spawn storms when the
+        # model server is reloading).
+        if self.s2_loop is not None and \
+                self.state in (self.BOUND_ACTIVE, self.DEGRADED_S1_DOWN,
+                               self.DEGRADED_S2_DOWN):
+            try:
+                landed, res = self.s2_loop.harvest_pulse(last)
+            except LLMError as e:
+                self._transition(self.DEGRADED_S2_DOWN, str(e))
+            else:
+                if landed and self.state == self.DEGRADED_S2_DOWN:
+                    self._transition(self.BOUND_ACTIVE, "s2 recovered")
+            if not self.s2_loop.worker_alive() and \
+                    self.s2_loop.due(last, paused):
+                try:
+                    self._pulse_digest(last)   # digest feeds the pulse
+                except Exception as e:         # digest gap ≠ seat down
+                    self.recorder.record("decision", tick=last,
+                                         mode="digest_gap", reason=str(e))
+                try:
+                    self.s2_loop.start_pulse(last, paused=paused)
+                except LLMError as e:
+                    self._transition(self.DEGRADED_S2_DOWN, str(e))
+                else:
+                    if self.state == self.DEGRADED_S2_DOWN:
+                        self._transition(self.BOUND_ACTIVE, "s2 recovered")
+
         if any(d.get("lifecycle") == "matchOver" for d in merged):
             self._transition(self.UNBOUND, "matchOver")
         return merged
@@ -219,6 +315,121 @@ class Driver:
 
     def tick_cross(self):
         return self.tick_clock.advance(self.client.last_tick or 0)
+
+
+
+    def _classify_step(self, merged, observed_tick):
+        """Digest feed (M-C): classification → P0 tracking → wake routing.
+        Must never stall the tick loop (digest failures recorded only)."""
+        try:
+            from twincore import digest as DIG
+            view = self.ledger.as_dict() if self.ledger else None
+            for c in DIG.classify_deltas(merged, view, DIG.default_rules()):
+                line = dict(c)
+                line["event_kind"] = line.pop("kind")
+                self.recorder.record("classification", **line)
+                if c["class"] == "P0" and c.get("rule") != "match_over":
+                    self._digest_state["p0"].append(
+                        {"tick": c.get("tick"), "kind": c["rule"],
+                         "detail": c.get("detail"), "outcome": "open"})
+                    if self.cfg.get("cadence.p0_wake") and self.s2_loop:
+                        self.s2_loop.wake()
+                for key in ("created", "damaged", "healed", "vanished"):
+                    got = c.get("detail", {}).get(key)
+                    if got:
+                        self._digest_state["changes"].append(
+                            "+%s %s" % (key, got if not isinstance(
+                                got, list) else len(got)))
+            self._digest_state["rollups"].append(
+                DIG.rollup(merged,
+                           self.cfg.get("digest.rollup_interval_ticks")))
+        except Exception as e:
+            self.recorder.record("decision", tick=observed_tick,
+                                 mode="classification_gap", reason=str(e))
+
+    def _poll_inbox(self, tick):
+        """Exchange-lane poll (FR-030): consume wake/note messages; wake
+        triggers the strategist's out-of-cycle pulse; notes are logged.
+        NOT a command path (FR-002)."""
+        if self.queue is None:
+            return
+        try:
+            msgs = self.queue.consume_inbox(
+                "inbox:seat%d" % self.cfg.get("seat.player_index"),
+                match_id=self.match_id)
+        except Exception as e:
+            self.recorder.record("decision", tick=tick, mode="inbox_gap",
+                                 reason=str(e))
+            return
+        for m in msgs:
+            self.recorder.record(
+                "note", tick=tick, sender=m.get("sender"),
+                message_kind=m.get("kind"), payload=m.get("payload"),
+                consumed=True)
+            if m.get("kind") == "wake" and self.s2_loop is not None:
+                self.s2_loop.wake()
+
+    def _run_s2_pulse(self, tick):
+        """Digest build + strategist pulse (M-C integration)."""
+        try:
+            self._pulse_digest(tick)
+        except Exception as e:  # digest building must never stall the seat
+            self.recorder.record("decision", tick=tick, mode="digest_gap",
+                                 reason=str(e))
+        return self.s2_loop.run_pulse(observed_tick=tick)
+
+    def _post_tick(self, tick):
+        """Standing-order lifecycle per tick (T018): TTL / veto / allies."""
+        try:
+            self.s1_loop.evaluate_standing_orders(tick)
+        except Exception as e:
+            self.recorder.record("decision", tick=tick,
+                                 mode="standing_order_gap", reason=str(e))
+
+    def _pulse_digest(self, tick):
+        """Build the strategist digest from the interval + record it."""
+        from twincore.digest import build_digest
+        now = tick
+        last = self._last_pulse_tick
+        self.pulse_seq += 1
+        dg = build_digest(
+            pulse_id=self.pulse_seq,
+            tick_range=(last if last is not None else 0, now),
+            p0_items=self._digest_state["p0"],
+            rollups=self._digest_state["rollups"],
+            changes=self._digest_state["changes"],
+            order_status=self._drain_order_status(),
+            s1_notes=self._drain_s1_notes(),
+            ledger=self.ledger.as_dict() if self.ledger else {},
+            budget=(self.cfg.get("budgets.digest_min"),
+                    self.cfg.get("budgets.digest_max")))
+        self._digest_state = _fresh_digest_state()
+        self.recorder.record("digest", tick=now, **dg)
+        self.s2_loop.digests.append(dg)
+        overflow = len(self.s2_loop.digests) - \
+            self.cfg.get("digest.window_pulses")
+        if overflow > 0:
+            del self.s2_loop.digests[:overflow]
+        self._last_pulse_tick = now
+
+    def _drain_order_status(self):
+        got = list(self._digest_state["order_status"] or [])
+        if self.s1_loop is not None and \
+                hasattr(self.s1_loop, "order_status_feed"):
+            got = got + list(self.s1_loop.order_status_feed())
+        if self.ledger:
+            for rej in self.ledger.last_rejections():
+                got.append({"order": rej.get("id"),
+                            "status": "orderRejected",
+                            "reason": "engine aux enum %s" % rej.get("aux")})
+            self.ledger._s["last_rejections"] = []
+        return got
+
+    def _drain_s1_notes(self):
+        if self.s1_loop is not None and \
+                hasattr(self.s1_loop, "s1_notes_feed"):
+            return self.s1_loop.s1_notes_feed()
+        return []
 
 
 def main(argv=None):

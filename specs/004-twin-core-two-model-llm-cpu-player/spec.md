@@ -381,7 +381,12 @@ measures above, without any manual intervention.
   packets (accepted AND rejected, with reasons), directive revisions (full
   history), tactical decisions with outcomes, command validation results, and
   per-channel usage accounting. The recorder MUST be sufficient to replay any
-  match segment offline.
+  match segment offline. AMENDED 2026-10-23 (FR-030 merge): the record store
+  is the Postgres queue table on 192.168.1.152/twincore_q — NO local files
+  for messages or logging; per-kind files are replaced by kind-filtered
+  queries; rows carry {match_id, tick, wall_ts(envelope)}; match ids are
+  unique per driver run. Postgres unavailability degrades to the in-memory
+  ring + a recorded gap, never a gameplay-affecting failure.
 - **FR-022**: Static-first prompt layout MUST be used for the tactical core
   (role card and directive versioned prefix precede the mutable window) so
   cache-friendly serving is preserved and per-tick cost stays low.
@@ -421,6 +426,21 @@ measures above, without any manual intervention.
   of game time) with combat-intensity gating allowed to temporarily
   accelerate ticks (playbook-aligned difficulty behaviour); both bounds MUST
   be configuration, never hardcoded.
+
+**Infrastructure rider (2026-10-23)**
+
+- **FR-030**: A Postgres-backed message queue MUST serve two purposes:
+  (a) full-trail LOG — it IS the record store (FR-021 amended: every
+  message/decision lands in the queue; zero logging files), and (b)
+  realtime message EXCHANGE — components (and later: harness/analyst
+  tooling) exchange wake/note messages through the queue (polling consume
+  with SKIP LOCKED + pg_notify listeners; DSN configuration).
+  The queue MUST NOT be a command path: only non-binding signal kinds
+  (wake, note) may be consumed inbound; order/command effects remain the
+  tactical core's sole domain (FR-002). Queue rows carry game-time tick
+  and wall timestamps observability-only (FR-003). Queue unavailability
+  degrades to in-memory recording + gap recording, never a
+  gameplay-affecting failure.
 
 ### Key Entities *(include if feature involves data)*
 

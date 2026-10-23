@@ -81,7 +81,7 @@ class Harness(unittest.TestCase):
                                  ship(3, typ="LightInterceptor")])
         self.rec_dir = tempfile.mkdtemp(prefix="twincore-s1-")
         import twincore.recorder as R
-        self.recorder = R.Recorder(self.rec_dir, match_id="m")
+        self.recorder = R.Recorder(match_id="m-%d" % R.now_ms())
 
     def loop(self, responses, economy=True):
         return S1.S1TickLoop(
@@ -225,9 +225,9 @@ class TestRecords(Harness):
         loop.ledger = s
         r = loop.run_tick(observed_tick=16)
         import twincore.recorder as R
-        cmds = R.scan(self.rec_dir, kinds=["command"])
+        cmds = self.recorder.scan(kinds=["command"])
         self.assertTrue(any(c["tool"] == "order_harvest" for c in cmds))
-        vals = R.scan(self.rec_dir, kinds=["validation"])
+        vals = self.recorder.scan(kinds=["validation"])
         self.assertTrue(all(v["status"] in ("ok", "clamped", "rejected")
                             for v in vals))
 
