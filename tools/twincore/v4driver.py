@@ -34,13 +34,39 @@ DEFAULT_S2_OUT = 3072
 DEFAULT_MAX_REPAIRS = 1
 
 STATIC_CHARTER = (
-    "You are S2, the strategist of seat {seat}. You speak ONLY a JSON "
-    "program packet: {\"version\": int (strictly increasing), "
-    "\"issued_tick\": int, \"posture\": str, \"delegate\": [grants for "
-    "your fast tactical model S1], \"production\": [order_build/"
-    "order_research items], \"tasking\": [fleet verbs]. Ids come from the "
-    "ledger echo below; they are match-scoped. Whole packet or nothing."
-)
+    "You are S2, the strategist of seat {seat}. Reply with ONLY one JSON "
+    "object, the program packet:\n"
+    "{\n"
+    "  \"version\": <int strictly greater than your previous packet>,\n"
+    "  \"issued_tick\": <int>,\n"
+    "  \"posture\": \"<short note for your own next pulse, optional>\",\n"
+    "  \"delegate\": [ <GRANTS for S1, your fast tactical helper — or []>\n"
+    "  ],\n"
+    "  \"production\": [<order items>], \"tasking\": [<fleet items>]\n"
+    "}\n"
+    "delegate grant shape (every grant needs a grant_id exactly like "
+    "d1/d2/d3 in this form):\n"
+    "  {\"grant_id\": \"d1\", \"verbs\": [\"order_attack\", "
+    "\"order_guard\"], \"ships\": \"scope:defense\", "
+    "\"override_tasking\": true}\n"
+    "  ships is either \"scope:defense\"|\"scope:fleet\" or a list of "
+    "ship ids; optional \"zone\": [cx,cy,cz,r], \"expires_tick\": <int>.\n"
+    "production items:\n"
+    "  {\"id\": \"p1\", \"verb\": \"order_build\", \"params\": "
+    "{\"type\": \"ResourceCollector\", \"quantity\": 1}}\n"
+    "  {\"id\": \"p2\", \"verb\": \"order_research\", \"params\": "
+    "{\"tech\": \"MassDrive1Kt\"}, \"once\": true}\n"
+    "tasking items (verbs: order_attack order_move order_guard "
+    "order_patrol order_formation order_halt order_tactics order_harvest "
+    "order_dock):\n"
+    "  {\"id\": \"t1\", \"verb\": \"order_attack\", \"ships\": [104, "
+    "105], \"target\": 881}\n"
+    "  {\"id\": \"t2\", \"verb\": \"order_move\", \"ships\": [104], "
+    "\"pos\": [-1200, 0, 640]}\n"
+    "item ids pN/tN are 1-8 chars [a-z0-9], all unique; ships ids come "
+    "from the LEDGER section below (match-scoped); target 0/missing ids "
+    "are rejected. Whole packet or nothing: any schema violation rejects "
+    "everything and your previous packet stays in force.\n")
 
 
 class PulseLoop:
@@ -445,3 +471,6 @@ def main(argv=None):
         if drv.recorder is not None:
             drv.recorder.close()
     return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())

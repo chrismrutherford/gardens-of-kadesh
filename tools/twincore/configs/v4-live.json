@@ -1,0 +1,39 @@
+{
+  "seat": {"player_index": 0},
+  "transport": {"mcp_url": "http://127.0.0.1:8302/mcp"},
+  "channels": {
+    "s2": {
+      "url": "http://192.168.2.72:9931/v1/chat/completions",
+      "model": "huihui-ai/Huihui-GLM-5.3-Flash-abliterated-GGUF:UD-IQ4_XS",
+      "max_context": 24576,
+      "max_output": 3072,
+      "temperature": 0.4,
+      "timeout_seconds": 300,
+      "thinking": false,
+      "max_tokens": 8192
+    },
+    "s1": {
+      "url": "http://192.168.1.106:9931/v1/chat/completions",
+      "model": "felippeburk/Qwen3.8-27B-NVFP4-MTP-GGUF",
+      "max_context": 8192,
+      "max_output": 400,
+      "temperature": 0.2,
+      "thinking": false,
+      "timeout_seconds": 60
+    }
+  },
+  "v4": {
+    "pulse_seconds": 120,
+    "micro_pulse_seconds": 8,
+    "tick_seconds": 1,
+    "max_commands_per_tick": 6,
+    "max_repair_attempts": 1,
+    "reflexes": {"harvest": true, "deliver": true},
+    "s1_channel": {"enabled": false},
+    "budgets": {"s2_in": 12288, "s2_out": 3072, "s1_in": 4096, "s1_out": 900}
+  },
+  "recorder": {"dsn": {"host": "192.168.1.152", "dbname": "twincore_q",
+                       "user": "postgres", "connect_timeout": 5}},
+  "difficulty": "intermediate",
+  "strategist": {"enabled": false}
+}
