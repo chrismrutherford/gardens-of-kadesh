@@ -99,6 +99,7 @@ class Executor:
         self.program = None
         self._item_state = {}
         self._suppressed = set()
+        self._clamp_counts = {}   # item_id → clamped ticks this generation
         # FR-006: the reflex set — toggles only, nothing else autonomous
         self.reflexes = {"harvest": True, "deliver": True}
         if reflexes:
@@ -108,18 +109,28 @@ class Executor:
     def set_program(self, program, tick):
         """Swap in a WHOLE new program generation (FR-008; old in-flight
         commands keep running; suppression state resets)."""
+        self._flush_clamp_summary(tick)
         self.program = program
         self._item_state = {}
         self._suppressed = set()
+        self._clamp_counts = {}
         for it in program.production + program.tasking:
             self._item_state[it["id"]] = self._new_status(program, it, tick)
+
+    def _flush_clamp_summary(self, tick):
+        """Trail hygiene: one aggregate row per generation instead of a
+        clamp row per tick."""
+        if self.recorder and self._clamp_counts:
+            self.recorder.record("validation", tick=tick, tool="*",
+                                 status="clamped_summary",
+                                 clamped=dict(self._clamp_counts))
 
     def _new_status(self, program, item, tick):
         return {"program_version": program.version, "item_id": item["id"],
                 "verb": item["verb"], "once": bool(item.get("once")),
                 "issued_tick": None, "command_ids": [],
                 "resolution": "pending", "reason": None, "aux": None,
-                "attempts": 0}
+                "clamped_count": 0, "attempts": 0}
 
     def item_status(self, item_id):
         st = self._item_state.get(item_id)
@@ -152,16 +163,19 @@ class Executor:
             st = self._item_state.get(item_id) if kind == "program" else None
             version = st["program_version"] if st else None
             if res["status"] == "clamped":
-                # stays pending; cadence retry next tick
-                if self.recorder:
+                # cadence retry next tick; record the FIRST clamp per item
+                # per generation, count silently after (trail hygiene)
+                n = self._clamp_counts.get(item_id, 0) + 1
+                self._clamp_counts[item_id] = n
+                if st is not None:
+                    st["clamped_count"] = n
+                if n == 1 and self.recorder:
                     self.recorder.record(
                         "validation", tick=tick, tool=proposal["verb"],
                         status="clamped", reason=res.get("reason"),
                         message=res.get("message"), hint=res.get("hint"),
                         proposed=proposal["params"],
                         program_version=version, item_id=item_id)
-                if st is not None and st["resolution"] == "pending":
-                    st["resolution"] = "pending"
                 continue
             if res["status"] == "rejected":
                 if st is not None:

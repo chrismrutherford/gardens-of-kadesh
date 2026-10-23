@@ -173,16 +173,32 @@ class PulseLoop:
 
     def _ledger_echo(self, view):
         own = self.own_player
-        counts = {}
-        for s in (view.get("ships_all") or {}).values():
+        lines = []
+        # per-ship identity lines: ids are tasking's vocabulary (S2 must
+        # be able to NAME ships; counts alone made it skip tasking)
+        for sid, s in sorted((view.get("ships_all") or {}).items(),
+                             key=lambda kv: _sid(kv[0])):
             if s.get("owner") != own:
                 continue
-            key = s.get("type") or "?"
-            counts[key] = counts.get(key, 0) + 1
-        lines = ["%s x%d" % (t, n) for t, n in sorted(counts.items())]
+            o = s.get("order")
+            verb = o.get("verb") if isinstance(o, dict) else o
+            pos = s.get("pos") or [0, 0, 0]
+            lines.append("ship %s %s pos[%.0f,%.0f,%.0f] order=%s cargo=%s"
+                         % (sid, s.get("type") or "?",
+                            pos[0] if len(pos) > 0 else 0,
+                            pos[1] if len(pos) > 1 else 0,
+                            pos[2] if len(pos) > 2 else 0,
+                            verb or "-", s.get("cargo", "-")))
         if view.get("bank") is not None:
             lines.append("bank %s" % (view["bank"],))
         lines.append("resources %d" % len(view.get("resources") or {}))
+        # techTree: without it S2 cannot pick the next tech (it guesses)
+        tt = view.get("techTree") or {}
+        if tt:
+            lines.append("techTree.researched: %s"
+                         % (tt.get("researched") or []))
+            if tt.get("canResearch") is not None:
+                lines.append("techTree.canResearch: %s" % tt.get("canResearch"))
         return lines or ["(no ships observed)"]
 
     def _p0_items(self):
@@ -503,3 +519,10 @@ def main(argv=None):
 
 if __name__ == "__main__":
     raise SystemExit(main())
+
+
+def _sid(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0

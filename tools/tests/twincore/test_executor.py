@@ -215,6 +215,59 @@ class TestRejections(ExecutorBase):
         self.assertEqual(ex.item_status("p1")["resolution"], "applied")
 
 
+class TestClampHygiene(ExecutorBase):
+    """Trail hygiene: first clamp per item recorded, repeats counted,
+    one summary row at generation end."""
+
+    def setUp(self):
+        import twincore.executor as E
+        self.E = E
+
+    def _rec(self):
+        rows = []
+        class Mem:
+            def record(self, kind, tick=None, **payload):
+                rows.append(dict(payload, kind=kind, tick=tick))
+        return rows, Mem()
+
+    def test_one_row_first_clamp_then_count_only(self):
+        d = {"production": [],   # clamp hygiene only: no default build
+             "tasking": [{"id": "ts", "verb": "order_guard", "ships": [100],
+                          "target": 90}]}
+        rows, mem = self._rec()
+        ex = make_executor(self.E.Executor, recorder=mem,
+                           reflexes={"harvest": False, "deliver": False})
+        ex.set_program(self.make_prog(**d), tick=1)
+        ex.on_tick(1)                     # applied (registered in-flight)
+        ex.on_tick(2)                     # clamp #1 → one row
+        ex.on_tick(3)                     # clamp #2 → silent
+        clamped = [r for r in rows if r["kind"] == "validation" and
+                   r.get("status") == "clamped"]
+        self.assertEqual(len(clamped), 1)
+        self.assertIn("duplicate in-flight", clamped[0]["reason"])
+        self.assertEqual(ex.item_status("ts")["clamped_count"], 2)
+
+    def test_generation_end_flushes_summary(self):
+        # standing guard on the same target across versions
+        d = {"tasking": [{"id": "ts", "verb": "order_guard", "ships": [100],
+                          "target": 90}]}
+        rows, mem = self._rec()
+        led = CF.FakeLedger(CF.v4_ledger(idle_collectors=1, builders=1))
+        ex = make_executor(self.E.Executor, ledger=led, recorder=mem,
+                           reflexes={"harvest": False, "deliver": False})
+        d["production"] = []                 # hygiene test: tasking only
+        ex.set_program(self.make_prog(**d), tick=1)
+        ex.on_tick(1)
+        ex.on_tick(2)                     # clamp #1
+        ex.set_program(P.validate_packet(
+            copy.deepcopy(CF.v4_packet(8, tasking=[
+                {"id": "ts", "verb": "order_guard", "ships": [100],
+                 "target": 88}])), 7), tick=10)
+        summary = [r for r in rows if r.get("status") == "clamped_summary"]
+        self.assertEqual(len(summary), 1)
+        self.assertEqual(summary[0]["clamped"], {"ts": 1})
+
+
 class TestRowsAndNoDoctrine(ExecutorBase):
     def setUp(self):
         import twincore.executor as E
