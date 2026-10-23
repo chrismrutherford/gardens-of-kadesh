@@ -7,6 +7,10 @@ import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "twincore"))
 
+os.environ.setdefault("V4_EX_IO_LOG", "/tmp/opencode/test-ex-io.log")
+os.environ.setdefault("V4_S1_IO_LOG", "/tmp/opencode/test-s1-io.log")
+os.environ.setdefault("V4_S2_IO_LOG", "/tmp/opencode/test-s2-io.log")
+
 DSN = {"host": os.environ.get("TWINCORE_PG_HOST", "192.168.1.152"),
        "dbname": "twincore_q", "user": "postgres", "connect_timeout": 5}
 

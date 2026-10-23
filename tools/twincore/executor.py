@@ -23,8 +23,20 @@ Per attempt semantics (executor-contract §2):
   is cadence, not retry.
 """
 import itertools
+import json
+import os
 
 import twincore.validator as V
+
+
+def _ex_io_append(path, text):
+    """Real-time ex io stream (append + flush). Observability only."""
+    try:
+        with open(path, "a") as fh:
+            fh.write(text)
+            fh.flush()
+    except Exception:
+        pass
 
 
 BUILDERS = ("Mothership", "Carrier")
@@ -209,6 +221,9 @@ class Executor:
         {program_version, item_id, command_id, verb, params, resolution,
         aux}. Program items first (fixed order), then the reflex floor —
         one combined ≤max_per_tick budget across all channels (FR-005)."""
+        import os
+        io = os.environ.get("V4_EX_IO_LOG", "/tmp/ex-io.log")
+        _exlog = lambda text: _ex_io_append(io, text)
         entries = []
         if self.program is not None:
             entries += self._program_entries(tick)
@@ -300,6 +315,13 @@ class Executor:
                       "verb": proposal["verb"], "params": params,
                       "resolution": resolution, "aux": aux}
             issued.append(minted)
+            _exlog("\nCMD tick=%s ch=%s item=%s v=%s cmd=%s %s %s -> %s%s"
+                   % (tick, kind, item_id, version, cmd_id,
+                      proposal["verb"], json.dumps(params, default=str),
+                      resolution, (" aux=%s" % aux) if aux else ""))
+        if not issued and self._clamp_counts:
+            _exlog("\ntick=%s clamps=%s (first-per-item logged in trail)"
+                   % (tick, dict(self._clamp_counts)))
         return issued
 
     # -- mechanical translation (zero policy) ------------------------------

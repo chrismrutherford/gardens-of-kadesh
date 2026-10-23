@@ -68,6 +68,26 @@ def _sid(v):
     except (TypeError, ValueError):
         return 0
 
+
+IO_LOG_PATHS = {"s1": "/tmp/s1-io.log", "s2": "/tmp/s2-io.log",
+                "ex": "/tmp/ex-io.log"}
+ENV_KEYS = {"s1": "V4_S1_IO_LOG", "s2": "V4_S2_IO_LOG",
+            "ex": "V4_EX_IO_LOG"}
+
+
+def _io_append(name, text):
+    """Real-time human IO stream (append + flush). Observability ONLY —
+    never allowed to break gameplay (Constitution IV)."""
+    import os
+    path = os.environ.get(ENV_KEYS.get(name, ""), "") or \
+        IO_LOG_PATHS.get(name)
+    try:
+        with open(path, "a") as fh:
+            fh.write(text)
+            fh.flush()
+    except Exception:
+        pass
+
 DEFAULT_PULSE_TICKS = seconds_to_ticks(120.0)
 DEFAULT_S2_IN = 12288
 DEFAULT_S2_OUT = 3072
@@ -272,12 +292,12 @@ class PulseLoop:
         except Exception:
             pass   # observability must never break the driver
 
-    # -- the channel call (worker body; ≤1 bounded repair) ----------------
     def _call(self, msgs, tick):
         try:
             self._call_inner(msgs, tick)
         except Exception as e:   # worker crash → visible failure, never a
             # ghost pulse (FR-012: every transition recorded)
+            self._io_log_block(tick, [], {"error": str(e)}, None)
             self._wake = False
             self._result = {"ok": False, "program": None,
                             "error": "pulse worker crashed: %s" % e,
@@ -288,12 +308,28 @@ class PulseLoop:
                                      pulse=self._pulse_count)
         return self._result
 
+    def _io_log_block(self, tick, msgs, out, extra):
+        """Append the full S2 exchange to the s2 io stream (real-time)."""
+        raw = (out or {}).get("raw") if isinstance(out, dict) else None
+        raw = raw or {}
+        block = ("\n=== S2 | tick=%s pulse=%s ===\n[INPUT]\n%s\n[RAW content]\n"
+                 "%s\n[RAW reasoning]\n%s\n[PARSED]\n%s\n%s" % (
+                     tick, self._pulse_count,
+                     json.dumps(msgs, indent=1, default=str)[:60000],
+                     str(raw.get("content"))[:60000],
+                     str(raw.get("reasoning"))[:60000],
+                     json.dumps(out.get("packet"), indent=1,
+                                default=str)[:20000],
+                     extra or ""))
+        _io_append("s2", block)
+
     def _call_inner(self, msgs, tick):
         attempts = 1 + max(0, int(self.max_repairs))
         reason = None
         for attempt in range(1, attempts + 1):
             out, usage = self.channel.propose(msgs)
-            self._debug_io(tick, attempt, msgs, out)
+            self._io_log_block(tick, msgs, out, "attempt=%d/%d"
+                               % (attempt, attempts))
             if self.recorder:
                 self.recorder.record("usage", tick=tick, channel="s2_out",
                                      prompt=usage.get("prompt"),
@@ -472,10 +508,12 @@ class S1MicroLoop:
 
     # -- the call: tool calls → envelope-validated micro items ---------------
     def _call(self, msgs, tick):
-        if self.recorder:
-            self.recorder.record("usage", tick=tick, channel="s1_out")
+        self._io_log_block(tick, msgs, None, "s1 pulse (awaiting calls)")
         try:
             calls, usage = self.channel.propose(msgs, self._tools)
+            self._io_log_block(tick, [], {"raw": getattr(
+                self.channel, "last_raw", None)}, "s1 calls=%s" %
+                json.dumps(calls, default=str)[:4000])
             if self.recorder:
                 self.recorder.record("usage", tick=tick, channel="s1_out",
                                      prompt=usage.get("prompt"),
@@ -486,6 +524,7 @@ class S1MicroLoop:
             if self.recorder:
                 self.recorder.record("packet_rejected", tick=tick,
                                      reason="s1 channel: %s" % e)
+            self._io_log_block(tick, [], None, "s1 channel error: %s" % e)
             return self._result
         prog = self.executor.program if self.executor else None
         items = self._items_from_calls(calls, prog)
@@ -548,6 +587,19 @@ class S1MicroLoop:
             if verb in g["verbs"]:
                 return g["grant_id"]
         return None
+
+    def _io_log_block(self, tick, msgs, out, extra):
+        """Append the S1 exchange to the s1 io stream (real-time)."""
+        raw = (out or {}).get("raw") if isinstance(out, dict) else None
+        raw = raw or {}
+        block = ("\n=== S1 | tick=%s seq=%s ===\n[INPUT]\n%s\n[RAW content]\n"
+                 "%s\n[RAW reasoning]\n%s\n%s" % (
+                     tick, self.seq,
+                     json.dumps(msgs, indent=1, default=str)[:30000],
+                     str(raw.get("content"))[:30000],
+                     str(raw.get("reasoning"))[:30000],
+                     extra or ""))
+        _io_append("s1", block)
 
 
 # --------------------------------------------------------------------------

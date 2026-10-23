@@ -88,8 +88,10 @@ class S1Channel:
         try:
             completion = self._client.chat.completions.create(**kwargs)
         except Exception as e:
+            self.last_raw = None
             raise LLMError("llm endpoint unreachable: %s" % e)
         message = completion.choices[0].message
+        self.last_raw = _message_extras(message)   # observability tap
         out = []
         for c in message.tool_calls or []:
             name = c.function.name
