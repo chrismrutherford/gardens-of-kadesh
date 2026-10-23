@@ -131,7 +131,8 @@ class Executor:
             ships = it.get("ships") or []
             scope = grant.get("ships") if grant else None
             if isinstance(scope, str) or (not ships and grant is not None):
-                resolved = self._scope_ships(scope, tick)
+                resolved = self._scope_ships(scope, tick) \
+                    if isinstance(scope, str) else list(scope)
                 ships = ships or resolved
             if not ships:
                 continue                      # nothing licensed to command

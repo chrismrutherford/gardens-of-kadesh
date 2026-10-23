@@ -307,8 +307,16 @@ def validate_micro_packet(raw, program, last_seq=0, tick=0):
             if verb in PRODUCTION_VERBS:
                 _production_params(it)   # schema only; grant check below
             if verb in TASKING_VERBS:
-                _validate_ship_list(it.get("ships"), "%s: ships" % it["id"])
-                it["ships"] = list(it["ships"])
+                ships = it.get("ships")
+                if ships is not None:
+                    # scope-class grants may resolve ships at the executor
+                    # (license interpretation, FR-017); absent ships with a
+                    # grant scope are legal here, illegal without one.
+                    _validate_ship_list(ships, "%s: ships" % it["id"])
+                    it["ships"] = list(ships)
+                elif program is None:
+                    _bad("%s: tasking without ships requires an active "
+                         "program with a scope grant" % it["id"])
                 target = it.get("target")
                 if target is not None and (not _int(target) or target <= 0):
                     _bad("%s: target must be a positive int" % it["id"])
