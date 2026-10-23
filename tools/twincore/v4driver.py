@@ -36,6 +36,12 @@ from twincore.executor import Executor
 import aiplay_protocol as AIP
 
 
+def _sid(v):
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
 DEFAULT_PULSE_TICKS = seconds_to_ticks(120.0)
 DEFAULT_S2_IN = 12288
 DEFAULT_S2_OUT = 3072
@@ -774,9 +780,3 @@ def main(argv=None):
 if __name__ == "__main__":
     raise SystemExit(main())
 
-
-def _sid(v):
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return 0
