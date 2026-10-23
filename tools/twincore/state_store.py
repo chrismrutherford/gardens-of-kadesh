@@ -68,6 +68,9 @@ class Ledger:
             "pending": {},            # order-id -> command record
             "directive_version": 0,
             "last_rejections": [],
+            "techTree": {},           # labs/canResearch/researched/locked
+            "buildQueue": [],         # in-progress builds (type/quantity)
+            "research": [],           # techs in flight
         }
 
     # -- writes -------------------------------------------------------------
@@ -104,6 +107,15 @@ class Ledger:
                 self._s["bank"] = p.get("resourceUnits", self._s["bank"])
         inc = snapshot.get("income")
         self._s["income"] = None if inc is None or inc < 0 else float(inc)
+
+        # engine meta: research tree + build queue (economy/research lanes)
+        if snapshot.get("techTree") is not None:
+            self._s["techTree"] = copy.deepcopy(snapshot["techTree"])
+        if snapshot.get("buildQueue") is not None:
+            self._s["buildQueue"] = list(
+                snapshot.get("buildQueue") or [])
+        if snapshot.get("research") is not None:
+            self._s["research"] = list(snapshot.get("research") or [])
 
         self._rebuild_blobs()
 

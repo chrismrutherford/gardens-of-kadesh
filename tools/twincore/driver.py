@@ -132,7 +132,11 @@ class Driver:
             timeout=self.cfg.get("channels.s1.timeout_seconds", 60.0),
             thinking=self.cfg.get("channels.s1.thinking"))
         validator = Validator()
-        economy = EconomyManager()
+        economy = EconomyManager(
+            collectors_target=self.cfg.get("economy.collectors_target"),
+            split=self.cfg.get("economy.build_split"),
+            research_delay_ticks=self.cfg.get(
+                "economy.research_delay_ticks"))
         self.validator = validator
         self.s1_loop = S1TickLoop(
             ledger=self.ledger, validator=validator, economy=economy,

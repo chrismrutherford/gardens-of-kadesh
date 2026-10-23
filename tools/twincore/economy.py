@@ -40,6 +40,9 @@ LANE_OF = {
 }
 LANE_OF["SupportFrigate"] = "defence"
 
+RESEARCH_CHAIN = ("MassDrive1Kt", "Chassis1", "MassDrive10Kt", "Chassis2",
+                  "MassDrive100Kt", "Chassis3", "IonWeapons")
+
 ATTACK_UNITS = ("LightInterceptor", "HeavyInterceptor", "AttackBomber",
                 "LightCorvette", "HeavyCorvette", "MultiGunCorvette",
                 "AssaultFrigate", "IonCannonFrigate")
@@ -52,6 +55,12 @@ ECONOMY_TARGETS = {
     "harvest_radius": 25000.0,
 }
 
+TICKS_PER_SEC = 16.0
+
+
+def seconds_to_ticks(seconds):
+    return max(1, int(round(seconds * TICKS_PER_SEC)))
+
 
 def _dist(a, b):
     return sum((x - y) ** 2 for x, y in zip(a or (0, 0, 0),
@@ -61,11 +70,15 @@ def _dist(a, b):
 class EconomyManager:
     """Deterministic lane allocator; emits validator-shaped proposals."""
 
-    def __init__(self, collectors_target=None, split=None):
+    def __init__(self, collectors_target=None, split=None,
+                 research_delay_ticks=None):
         self.collectors_target = collectors_target or \
             ECONOMY_TARGETS["collectors_target"]
         self.split = split or {"attack": 30, "defence": 30, "economy": 40}
+        self.research_delay_ticks = research_delay_ticks or \
+            seconds_to_ticks(45.0)   # intermediate-preset default
         self._spent = {"attack": 0.0, "defence": 0.0, "economy": 0.0}
+        self._last_research = None
 
     # -- accounting (fed back by the tick loop on accepted commands) --------
     def accept(self, verb, cost=0.0, **_ignored):
@@ -96,9 +109,30 @@ class EconomyManager:
         out += self._guards(ship_items)
 
         if mother:
+            out += self._research(ledger)
             builds = self._build_plan(ship_items, ledger, bank, mother)
             out += builds
         return out
+
+    # -- demand-driven research chain (playbook A1-3: only ask for research
+    #    when what it unlocks is needed; deterministic chain + delay) -------
+    def _research(self, ledger):
+        tt = ledger.get("techTree") or {}
+        if not tt.get("canResearch"):
+            return []
+        if ledger.get("research"):
+            return []                      # a lab is busy
+        researched = set(tt.get("researched") or [])
+        nxt = next((t for t in RESEARCH_CHAIN if t not in researched), None)
+        if nxt is None:
+            return []                      # doctrine chain complete
+        tick = ledger.get("tick", 0) or 0
+        if self._last_research is not None and \
+                tick - self._last_research < self.research_delay_ticks:
+            return []
+        self._last_research = tick
+        return [{"verb": "order_research", "params": {"tech": nxt},
+                 "lane": "economy"}]
 
     # -- A1 opening: dispatch every immediately available collector ----------
     def _opening_dispatch(self, ship_items, ledger):
@@ -148,10 +182,13 @@ class EconomyManager:
     # -- build plan: lanes + ratios ---------------------------------------------
     def _build_plan(self, ship_items, ledger, bank, mother):
         proposals = []
+        queued = {}
+        for q in (ledger.get("buildQueue") or []):
+            if isinstance(q, dict) and q.get("type"):
+                # in-progress builds count toward their type's targets
+                queued[q["type"]] = queued.get(q["type"], 0) + \
+                    int(q.get("quantity") or 1)
         total_spent = sum(self._spent.values())
-        collectors = [s for s in ship_items if _is_collector(s)
-                      and _harvesting(s)]
-        n_collectors = len(collectors)
         controllers = [s for s in ship_items if "Controller" in
                        (s.get("type") or "")]
         supports = [s for s in ship_items if _is_support(s)]
@@ -160,10 +197,15 @@ class EconomyManager:
                     (s.get("type") or "")]
 
         build_type = self._next_build_type(
-            bank=bank, n_collectors=len(_all_collectors(ship_items)),
-            n_controllers=len(controllers),
-            n_supports=len(supports), n_strike=len(strike),
-            n_research=len(research), total_spent=total_spent)
+            bank=bank,
+            n_collectors=len(_all_collectors(ship_items)) +
+            queued.get("ResourceCollector", 0),
+            n_controllers=len(controllers) +
+            queued.get("ResourceController", 0),
+            n_supports=len(supports) + queued.get("SupportFrigate", 0),
+            n_strike=len(strike) + queued.get("LightInterceptor", 0),
+            n_research=len(research) + queued.get("ResearchShip", 0),
+            total_spent=total_spent)
         if build_type is None:
             return []
         params = {"type": build_type}
