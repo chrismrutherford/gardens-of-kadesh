@@ -582,7 +582,11 @@ class V4Driver:
     # -- binding (FR-002: exactly ONE owner) --------------------------------
     def bind(self):
         if self.client is not None:
-            return self.client.bind(self.own_player)
+            res = self.client.bind(self.own_player)
+            if isinstance(res, dict) and res.get("error"):
+                raise RuntimeError("bind failed: %s"
+                                   % res["error"].get("message", res["error"]))
+            return res
         return None
 
     # -- the game-time tick --------------------------------------------------
