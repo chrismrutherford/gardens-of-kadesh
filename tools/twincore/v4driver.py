@@ -312,12 +312,12 @@ class PulseLoop:
         """Append the full S2 exchange to the s2 io stream (real-time)."""
         raw = (out or {}).get("raw") if isinstance(out, dict) else None
         raw = raw or {}
-        block = ("\n=== S2 | tick=%s pulse=%s ===\n[INPUT]\n%s\n[RAW content]\n"
-                 "%s\n[RAW reasoning]\n%s\n[PARSED]\n%s\n%s" % (
+        block = ("\n=== S2 | tick=%s pulse=%s ===\n[INPUT]\n%s\n"
+                 "[RAW content]\n%s\n[RAW reasoning]\n%s\n[PARSED]\n%s\n%s" % (
                      tick, self._pulse_count,
                      json.dumps(msgs, indent=1, default=str)[:60000],
-                     str(raw.get("content"))[:60000],
-                     str(raw.get("reasoning"))[:60000],
+                     str(raw.get("content") or "<empty>")[:60000],
+                     str(raw.get("reasoning") or "<none>")[:60000],
                      json.dumps(out.get("packet"), indent=1,
                                 default=str)[:20000],
                      extra or ""))
@@ -592,12 +592,12 @@ class S1MicroLoop:
         """Append the S1 exchange to the s1 io stream (real-time)."""
         raw = (out or {}).get("raw") if isinstance(out, dict) else None
         raw = raw or {}
-        block = ("\n=== S1 | tick=%s seq=%s ===\n[INPUT]\n%s\n[RAW content]\n"
-                 "%s\n[RAW reasoning]\n%s\n%s" % (
+        block = ("\n=== S1 | tick=%s seq=%s ===\n[INPUT]\n%s\n"
+                 "[RAW content]\n%s\n[RAW reasoning]\n%s\n%s" % (
                      tick, self.seq,
                      json.dumps(msgs, indent=1, default=str)[:30000],
-                     str(raw.get("content"))[:30000],
-                     str(raw.get("reasoning"))[:30000],
+                     str(raw.get("content") or "<empty>")[:20000],
+                     str(raw.get("reasoning") or "<empty>")[:20000],
                      extra or ""))
         _io_append("s1", block)
 

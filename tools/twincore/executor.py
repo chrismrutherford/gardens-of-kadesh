@@ -319,9 +319,13 @@ class Executor:
                    % (tick, kind, item_id, version, cmd_id,
                       proposal["verb"], json.dumps(params, default=str),
                       resolution, (" aux=%s" % aux) if aux else ""))
-        if not issued and self._clamp_counts:
-            _exlog("\ntick=%s clamps=%s (first-per-item logged in trail)"
-                   % (tick, dict(self._clamp_counts)))
+        firsts = [it for it, v in self._clamp_counts.items() if v == 1]
+        if not issued and firsts:
+            _exlog("CLAMP tick=%s first:%s rest silent (counts=%s)"
+                   % (tick, firsts, {k: v for k, v in
+                                     self._clamp_counts.items()})
+                   if tick % 25 == 0 else
+                   "CLAMP tick=%s first-per-item=%s" % (tick, firsts))
         return issued
 
     # -- mechanical translation (zero policy) ------------------------------
