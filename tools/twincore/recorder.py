@@ -60,7 +60,17 @@ class Recorder:
         if self._conn is not None and getattr(self._conn, "closed", 1) == 0:
             return self._conn
         import psycopg2
-        self._conn = psycopg2.connect(**self.dsn)
+        # keepalives + statement timeout: a wedged socket MUST surface as
+        # an error (→ degraded ring) instead of freezing every record()
+        dsn = dict(self.dsn)
+        opts = dsn.pop("options", "") or ""
+        if "statement_timeout" not in opts:
+            opts = (opts + " -c statement_timeout=5000").strip()
+        self._conn = psycopg2.connect(
+            keepalives=1, keepalives_idle=30, keepalives_interval=10,
+            keepalives_count=3,
+            connect_timeout=int(dsn.pop("connect_timeout", 5) or 5),
+            options=opts, **dsn)
         self._conn.autocommit = True
         return self._conn
 
@@ -94,7 +104,6 @@ class Recorder:
         return line
 
     def _insert(self, kind, line):
-        import psycopg2.extras
         try:
             conn = self._connect()
             with conn.cursor() as cur:
@@ -108,6 +117,9 @@ class Recorder:
             line["wall_ts"] = created_at.timestamp()
             self.degraded = False
         except Exception:
+            # wedged/broken socket: drop the connection so the next
+            # record() reconnects; the ring carries the tail meanwhile
+            self._conn = None
             self.degraded = True
             self.dropped += 1   # counted; ring/other kinds still carry
 
