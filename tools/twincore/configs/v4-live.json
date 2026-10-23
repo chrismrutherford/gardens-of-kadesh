@@ -12,9 +12,9 @@
       "max_context": 24576,
       "max_output": 3072,
       "temperature": 0.4,
-      "timeout_seconds": 300,
+      "timeout_seconds": 1500,
       "thinking": false,
-      "max_tokens": 20000
+      "max_tokens": 30000
     },
     "s1": {
       "url": "http://192.168.1.106:9931/v1/chat/completions",

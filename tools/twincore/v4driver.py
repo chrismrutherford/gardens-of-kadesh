@@ -204,16 +204,28 @@ def build_menu_lines(view):
 
 def research_menu_lines(view):
     """RESEARCH MENU: researchable techs (union of missing prereqs, minus
-    researched) with the hulls that need them, labs and busy state."""
+    researched) with the hulls that need them, labs and lab state. The
+    canResearch flag IS the lab state (live lesson: labeling it
+    'lab_busy' made the strategist skip research every pulse)."""
     tt = view.get("techTree") or {}
     researched = set(tt.get("researched") or [])
     needers = {}
     for ent in tt.get("locked") or []:
         for tech in ent.get("missing") or []:
-            needers.setdefault(tech, []).append(ent.get("type"))
+            needers.setdefault(tech, set()).add(ent.get("type"))
     researchable = sorted(set(needers) - researched)
-    lines = ["labs=%s lab_busy=%s (canResearch)"
-             % (tt.get("labs"), tt.get("canResearch"))]
+    can = tt.get("canResearch")
+    if can is True:
+        lab_line = "labs=%s canResearch=True — the lab is FREE: you may " \
+                   "order_research one tech now" % (tt.get("labs"),)
+    elif can is False:
+        lab_line = "labs=%s canResearch=False — research already in " \
+                   "progress; do NOT queue another this pulse" % (
+                       tt.get("labs"),)
+    else:
+        lab_line = "labs=%s canResearch=%s (unknown lab state)" % (
+            tt.get("labs"), tt.get("canResearch"))
+    lines = [lab_line]
     for tech in researchable:
         lines.append("tech %s (needed for: %s)"
                      % (tech, ", ".join(sorted(set(needers[tech])))))

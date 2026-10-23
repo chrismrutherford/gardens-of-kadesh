@@ -389,3 +389,32 @@ class TestDraftV3Driver(unittest.TestCase):
         self.assertIn(oid, led.in_flight())
         self.assertTrue(drv.executor.item_status(
             issued[0]["item_id"])["engine_acked"])
+
+
+class TestResearchMenuLabels(unittest.TestCase):
+    """Live lesson: 'lab_busy=True' (canResearch mislabeled) made the
+    strategist skip research every pulse. The menu must say what the lab
+    CAN do right now, in plain English."""
+
+    def setUp(self):
+        import twincore.v4driver as VD
+        self.VD = VD
+
+    def test_free_lab_says_free(self):
+        lines = self.VD.research_menu_lines(
+            {"techTree": {"labs": 1, "canResearch": True,
+                          "researched": [],
+                          "locked": [{"type": "P1Fighter", "disabled":
+                                      False,
+                                      "missing": ["Chassis1"]}]}})
+        self.assertIn("the lab is FREE", lines[0])
+        self.assertNotIn("lab_busy", lines[0])
+        self.assertIn("tech Chassis1", lines[1])
+
+    def test_busy_lab_says_wait(self):
+        lines = self.VD.research_menu_lines(
+            {"techTree": {"labs": 1, "canResearch": False,
+                          "researched": [],
+                          "locked": []}})
+        self.assertIn("research already in progress", lines[0])
+        self.assertIn("do NOT queue another", lines[0])
