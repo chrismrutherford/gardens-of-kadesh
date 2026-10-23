@@ -97,7 +97,9 @@ class TestAsyncTwoPhase(PulseBase):
         t0 = time.time()
         out = drv.on_tick(1)                  # spawn: returns immediately
         self.assertLess(time.time() - t0, 0.15)   # never blocks the tick
-        self.assertEqual(out, [])
+        # no program yet ⇒ reflexes only (FR-006); nothing program-cited
+        self.assertTrue(all(m["item_id"].startswith("reflex")
+                            for m in out))
         for t in range(2, 30):                # pump until applied
             out = drv.on_tick(t)
             if drv.executor.program is not None:

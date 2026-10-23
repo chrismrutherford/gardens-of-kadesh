@@ -59,7 +59,7 @@ def v4_ledger(own=0, idle_collectors=0, full_collectors=0, asteroids=1,
     for _ in range(full_collectors):
         ships.append({"id": rid, "type": "ResourceCollector",
                       "owner": own, "pos": [10.0, 0.0, 0.0],
-                      "order": "harvest", "cargo": 100})
+                      "order": "harvest", "cargo": 100, "cargo_max": 100})
         rid += 1
     roids = []
     aid = 500
@@ -108,6 +108,19 @@ class FakeLedger:
     def clear_pending(self):
         self._pending.clear()
 
+    def apply_snapshot(self, snapshot):
+        """Spec-003-shaped snapshot → state (test double of Ledger)."""
+        for s in snapshot.get("ships") or []:
+            self._ships_all[s["id"]] = dict(s)
+        for r in snapshot.get("resources") or []:
+            self._resources[r["id"]] = dict(r)
+        for p in snapshot.get("players") or []:
+            if p.get("resourceUnits") is not None:
+                self._state["bank"] = p["resourceUnits"]
+        self._state["ships_all"] = self._ships_all
+        self._state["resources"] = self._resources
+        return snapshot
+
 
 class FakeClient:
     """Client test double: records wire orders; errors are scriptable per
@@ -116,6 +129,9 @@ class FakeClient:
     def __init__(self):
         self.issued = []
         self.error_queue = {}   # tool -> list of error payloads
+
+    def bind(self, player_index=0):
+        return {"bound": player_index}
 
     def order(self, tool, params=None):
         self.issued.append({"tool": tool, "params": dict(params or {})})

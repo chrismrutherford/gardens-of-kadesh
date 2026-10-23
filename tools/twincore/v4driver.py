@@ -16,11 +16,13 @@ control modules (s1tick/economy/s2pulse/directive) are NOT referenced.
 """
 import json
 import threading
+import time
 
 from twincore.config import seconds_to_ticks
 from twincore.llm import S2Channel
 from twincore.program import ProgramError, build_pulse_input, validate_packet
 from twincore.client import Client
+from twincore.recorder import Recorder, now_ms
 from twincore.state_store import Ledger
 from twincore.validator import Validator
 from twincore.executor import Executor
@@ -302,3 +304,144 @@ class V4Driver:
         if self.client is not None:
             return self.client.resume()
         return None
+
+    # -- observation + run loop (live plumbing) ------------------------------
+    def observe(self, snapshot=None):
+        """Pull an observation into the ledger (spec-003 shape). Returns
+        the snapshot; sets self.engine_tick."""
+        if snapshot is None:
+            snapshot = self.client.observe()
+        ledger = self.ledger
+        if hasattr(ledger, "apply_snapshot"):
+            ledger.apply_snapshot(snapshot)
+        ms = snapshot.get("matchStatus") or {}
+        self.engine_tick = ms.get("tick") or snapshot.get("tick") or 0
+        return snapshot
+
+    def run(self, max_polls=None, poll_seconds=1.0):
+        """Live loop: observe → on_tick, in engine game time. Paused or
+        match-over states issue nothing (FR-003). Returns poll count."""
+        try:
+            self.bind()
+        except Exception as e:
+            if self.recorder:
+                self.recorder.record("degradation", tick=None,
+                                     **{"from": "offline",
+                                        "to": "interface_down",
+                                        "reason": "bind failed: %s" % e})
+            return 0
+        polls = 0
+        while max_polls is None or polls < max_polls:
+            try:
+                snap = self.observe()
+            except Exception as e:
+                if self.recorder:
+                    self.recorder.record("degradation", tick=None,
+                                         **{"from": "online",
+                                            "to": "interface_down",
+                                            "reason": "observe failed: %s"
+                                                      % e})
+                self._sleep(poll_seconds)
+                continue
+            ms = snap.get("matchStatus") or {}
+            paused = (not ms.get("running", True)) or \
+                bool(snap.get("paused"))
+            self.on_tick(self.engine_tick or 0, paused=paused)
+            polls += 1
+            self._sleep(poll_seconds)
+        return polls
+
+    @staticmethod
+    def _sleep(seconds):
+        if seconds and seconds > 0:
+            time.sleep(seconds)
+
+
+def _cfgget(config, path, default=None):
+    """Path access for Config objects AND plain dicts (test doubles)."""
+    try:
+        if not isinstance(config, dict):
+            return config.get(path, default)
+    except AttributeError:
+        pass
+    node = config
+    for part in path.split("."):
+        if not isinstance(node, dict) or part not in node:
+            return default
+        node = node[part]
+    return node
+
+
+def driver_from_config(config, recorder=None, client=None, channel=None):
+    """Build a V4Driver from a validated Config (or config-shaped dict).
+
+    Only OBSERVATION of configuration — no playbook material may appear as
+    code constants here; endpoints/cadences/budgets are config, FR-015/013.
+    """
+    seat = int(_cfgget(config, "seat.player_index", 0) or 0)
+    if client is None:
+        client = Client(mcp_url=_cfgget(
+            config, "transport.mcp_url", "http://127.0.0.1:8302/mcp"))
+    if channel is None:
+        url = _cfgget(config, "channels.s2.url") or ""
+        if not url:
+            raise ValueError("channels.s2.url is required (FR-015)")
+        channel = S2Channel(
+            url=url, model=_cfgget(config, "channels.s2.model", ""),
+            max_output=int(_cfgget(config, "channels.s2.max_output",
+                                   DEFAULT_S2_OUT)),
+            timeout=float(_cfgget(config, "channels.s2.timeout_seconds",
+                                  300.0)),
+            thinking=_cfgget(config, "channels.s2.thinking", False))
+    v4 = _cfgget(config, "v4", {}) or {}
+    budgets = v4.get("budgets") or {}
+    pulse_ticks = seconds_to_ticks(v4.get("pulse_seconds", 120))
+    if recorder is None:
+        dsn = config.get("recorder.dsn") or {}
+        recorder = Recorder(match_id="v4-%d" % now_ms(), dsn=dsn or None)
+    ledger = Ledger(own_player=seat)
+    validator = Validator()
+    reflexes = v4.get("reflexes") or {"harvest": True, "deliver": True}
+    executor = Executor(client=client, ledger=ledger, recorder=recorder,
+                        validator=validator, own_player=seat,
+                        max_per_tick=int(v4.get("max_commands_per_tick", 6)),
+                        reflexes=reflexes)
+    drv = V4Driver(client=client, channel=channel, recorder=recorder,
+                   ledger=ledger, executor=executor, validator=validator,
+                   pulse_ticks=pulse_ticks,
+                   s2_in=int(budgets.get("s2_in", DEFAULT_S2_IN)),
+                   s2_out=int(budgets.get("s2_out", DEFAULT_S2_OUT)),
+                   max_repairs=int(v4.get("max_repair_attempts",
+                                          DEFAULT_MAX_REPAIRS)),
+                   own_player=seat)
+    drv._v4cfg = dict(v4)
+    return drv
+
+
+def main(argv=None):
+    """CLI: python -m tools.twincore.v4driver --config <config.json>"""
+    import argparse
+    import os
+    import sys
+    ap = argparse.ArgumentParser(description="v4 strategist-driven driver")
+    ap.add_argument("--config", required=True)
+    ap.add_argument("--poll", type=float, default=1.0,
+                    help="wall poll interval (observability only)")
+    ap.add_argument("--polls", type=int, default=None,
+                    help="stop after N observe polls (default: forever)")
+    a = ap.parse_args(argv)
+    sys.path.insert(0, os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    from twincore.config import load
+    cfg = load(a.config)
+    drv = driver_from_config(cfg)
+    print("v4driver: seat %d pulse_ticks %d → %s"
+          % (drv.own_player, drv.loop.pulse_ticks, a.config), flush=True)
+    try:
+        drv.run(poll_seconds=a.poll, max_polls=a.polls)
+    except KeyboardInterrupt:
+        pass
+    finally:
+        if drv.recorder is not None:
+            drv.recorder.close()
+    return 0

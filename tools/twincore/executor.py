@@ -28,13 +28,66 @@ import twincore.validator as V
 
 
 BUILDERS = ("Mothership", "Carrier")
+DOCKABLES = ("Mothership", "Carrier", "ResearchShip")
+COLLECTOR = "ResourceCollector"
+# carried observation semantics: verbs under which a collector is idle
+# economy (parade ships harvest NOTHING)
+IDLE_HARVEST_VERBS = ("idle", "moving", "parade", "order?")
+
+
+def _order_verb(ship):
+    o = ship.get("order")
+    if isinstance(o, dict):
+        return o.get("verb")
+    if isinstance(o, str):
+        return o
+    return None
+
+
+def _full_for_deliver(ship):
+    amount = None
+    for k in ("cargo", "resourceUnits", "cargoAmount"):
+        if ship.get(k) is not None:
+            amount = float(ship[k])
+            break
+    if amount is None:
+        return False
+    cap = None
+    for k in ("cargo_max", "cargoMax", "resourceHold"):
+        if ship.get(k) is not None:
+            cap = float(ship[k])
+            break
+    return cap is not None and amount >= cap
+
+
+def _dist2(a, b):
+    return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2 + (a[2] - b[2]) ** 2)
+
+
+def _nearest(sid, source_pos, things, key_pos):
+    """Deterministic nearest: euclidean distance, tie-break lower id."""
+    best = None
+    for t in sorted(things, key=lambda t: _sid_t(t, key_pos, "id")):
+        d = _dist2(source_pos, t.get(key_pos) or [0.0, 0.0, 0.0])
+        key = (d, _sid_t(t, key_pos, "id"))
+        if best is None or key < best[0]:
+            best = (key, t.get("id"))
+    return None if best is None else best[1]
+
+
+def _sid_t(thing, key_pos, pk):
+    try:
+        return int(thing.get(pk))
+    except (TypeError, ValueError):
+        return 0
 
 
 class Executor:
     """The ONLY issuer of v4 commands (its client is the binding owner)."""
 
     def __init__(self, client, ledger, recorder=None, validator=None,
-                 own_player=0, max_per_tick=None, order_seq_start=1000):
+                 own_player=0, max_per_tick=None, order_seq_start=1000,
+                 reflexes=None):
         self.client = client
         self.ledger = ledger
         self.recorder = recorder
@@ -46,6 +99,10 @@ class Executor:
         self.program = None
         self._item_state = {}
         self._suppressed = set()
+        # FR-006: the reflex set — toggles only, nothing else autonomous
+        self.reflexes = {"harvest": True, "deliver": True}
+        if reflexes:
+            self.reflexes.update({k: bool(v) for k, v in reflexes.items()})
 
     # -- program generation ---------------------------------------------
     def set_program(self, program, tick):
@@ -75,17 +132,25 @@ class Executor:
     def on_tick(self, tick):
         """One deterministic executor tick. Returns minted commands, each
         {program_version, item_id, command_id, verb, params, resolution,
-        aux}."""
-        if self.program is None:
-            return []
-        proposals = self._proposals(tick)
-        if not proposals:
+        aux}. Program items first (fixed order), then the reflex floor —
+        one combined ≤max_per_tick budget across all channels (FR-005)."""
+        entries = []
+        if self.program is not None:
+            entries += self._program_entries(tick)
+        entries += self._reflex_entries(tick)
+        if not entries:
             return []
         results = self.validator.validate_batch(
-            [p for _, p in proposals], self.ledger)
+            [p for _it, p, _k in entries if p is not None], self.ledger)
         issued = []
-        for (item_id, proposal), res in zip(proposals, results):
-            st = self._item_state[item_id]
+        idx = 0
+        for item_id, proposal, kind in entries:
+            if proposal is None:
+                continue              # blocked pre-validation (no builder)
+            res = results[idx]
+            idx += 1
+            st = self._item_state.get(item_id) if kind == "program" else None
+            version = st["program_version"] if st else None
             if res["status"] == "clamped":
                 # stays pending; cadence retry next tick
                 if self.recorder:
@@ -94,22 +159,23 @@ class Executor:
                         status="clamped", reason=res.get("reason"),
                         message=res.get("message"), hint=res.get("hint"),
                         proposed=proposal["params"],
-                        program_version=st["program_version"],
-                        item_id=item_id)
+                        program_version=version, item_id=item_id)
+                if st is not None and st["resolution"] == "pending":
+                    st["resolution"] = "pending"
                 continue
             if res["status"] == "rejected":
-                st["resolution"] = "blocked"
-                st["reason"] = res.get("reason")
-                st["attempts"] += 1
-                self._suppressed.add(item_id)   # max one attempt per cycle
+                if st is not None:
+                    st["resolution"] = "blocked"
+                    st["reason"] = res.get("reason")
+                    st["attempts"] += 1
+                    self._suppressed.add(item_id)  # 1 attempt per cycle
                 if self.recorder:
                     self.recorder.record(
                         "validation", tick=tick, tool=proposal["verb"],
                         status="rejected", reason=res.get("reason"),
                         message=res.get("message"), hint=res.get("hint"),
                         proposed=proposal["params"],
-                        program_version=st["program_version"],
-                        item_id=item_id)
+                        program_version=version, item_id=item_id)
                 continue
             # ok → mint the wire command
             params = dict(proposal["params"])
@@ -122,13 +188,19 @@ class Executor:
             if err:
                 resolution = "rejected"
                 aux = err.get("code")
-            st["resolution"] = resolution
-            st["aux"] = aux
-            st["reason"] = (err or {}).get("message") if err else None
-            st["issued_tick"] = tick
-            st["attempts"] += 1
-            st["command_ids"].append(cmd_id)
-            if resolution == "applied":
+            if st is not None:
+                st["resolution"] = resolution
+                st["aux"] = aux
+                st["reason"] = (err or {}).get("message") if err else None
+                st["issued_tick"] = tick
+                st["attempts"] += 1
+                st["command_ids"].append(cmd_id)
+                if resolution == "applied":
+                    self.ledger.register_command(
+                        {"id": cmd_id, "tool": proposal["verb"],
+                         "fingerprint": res.get("fingerprint"),
+                         "issued_tick": tick})
+            else:
                 self.ledger.register_command(
                     {"id": cmd_id, "tool": proposal["verb"],
                      "fingerprint": res.get("fingerprint"),
@@ -138,13 +210,13 @@ class Executor:
                     "validation", tick=tick, tool=proposal["verb"],
                     status=res.get("status"), reason=res.get("reason"),
                     proposed=proposal["params"],
-                    program_version=st["program_version"], item_id=item_id)
+                    program_version=version, item_id=item_id)
                 self.recorder.record(
                     "command", tick=tick, oid=cmd_id,
                     tool=proposal["verb"], params=params,
                     validation=res, status=resolution, aux=aux,
-                    program_version=st["program_version"], item_id=item_id)
-            minted = {"program_version": st["program_version"],
+                    program_version=version, item_id=item_id)
+            minted = {"program_version": version,
                       "item_id": item_id, "command_id": cmd_id,
                       "verb": proposal["verb"], "params": params,
                       "resolution": resolution, "aux": aux}
@@ -152,22 +224,82 @@ class Executor:
         return issued
 
     # -- mechanical translation (zero policy) ------------------------------
-    def _proposals(self, tick):
+    def _program_entries(self, tick):
         """Program items → validator proposals, fixed order: production
-        (packet order), then tasking (packet order)."""
+        (packet order), then tasking (packet order). [(item_id, proposal,
+        "program")] (proposal None = blocked pre-validation)."""
         out = []
         for item in self.program.production:
             if not self._eligible(item, tick):
                 continue
             p = self._production_proposal(item)
-            if p is None:
-                continue   # blocked: no builder discovered
-            out.append((item["id"], p))
+            if p is not None:        # None: blocked (no builder)
+                out.append((item["id"], p, "program"))
         for item in self.program.tasking:
             if not self._eligible(item, tick):
                 continue
-            out.append((item["id"], self._tasking_proposal(item)))
+            out.append((item["id"], self._tasking_proposal(item), "program"))
         return out
+
+    # -- reflex floor (FR-006; contracts §3) ---------------------------------
+    def _reflex_entries(self, tick):
+        """EXACTLY: (a) idle collector → harvest nearest asteroid;
+        (b) full collector → dock nearest dock-capable own ship. Runs ONLY
+        for ships not covered by a live program item (gap-fillers)."""
+        if not (self.reflexes.get("harvest") or self.reflexes.get("deliver")):
+            return []
+        view = self.ledger.as_dict() if self.ledger is not None else {}
+        ships_all = view.get("ships_all") or {}
+        own = [s for s in ships_all.values()
+               if s.get("owner") == self.own_player]
+        collectors = [s for s in own if s.get("type") == COLLECTOR]
+        if not collectors:
+            return []
+        covered = self._covered_ships()
+        dockables = [s for s in own if s.get("type") in DOCKABLES]
+        resources = list((view.get("resources") or {}).values())
+        out = []
+        for s in sorted(collectors, key=lambda x: _sid_t(x, None, "id")):
+            sid = s["id"]
+            if sid in covered:
+                continue                        # program wins, gap-fillers
+            if self.reflexes.get("harvest") and self._idle_for_harvest(s):
+                if not resources:
+                    continue
+                rid = _nearest(sid, s.get("pos") or [0, 0, 0],
+                               resources, "pos")
+                if rid is None:
+                    continue
+                out.append((sid, {"verb": "order_harvest", "params": {
+                    "ships": [sid], "target": rid}}, "reflex"))
+            elif self.reflexes.get("deliver") and _full_for_deliver(s):
+                if not dockables:
+                    continue
+                did = _nearest(sid, s.get("pos") or [0, 0, 0],
+                               dockables, "pos")
+                if did is None:
+                    continue
+                out.append((sid, {"verb": "order_dock", "params": {
+                    "ships": [sid], "dockWith": did}}, "reflex"))
+        # map ship-id item keys to reflex names for citations
+        named = []
+        for item_id, proposal, kind in out:
+            tag = "reflex_harvest" \
+                if proposal["verb"] == "order_harvest" else "reflex_deliver"
+            named.append((tag, proposal, "reflex"))
+        return named
+
+    def _idle_for_harvest(self, ship):
+        verb = _order_verb(ship)
+        return not verb or verb in IDLE_HARVEST_VERBS
+
+    def _covered_ships(self):
+        if self.program is None:
+            return set()
+        covered = set()
+        for item in self.program.tasking:
+            covered.update(item.get("ships") or [])
+        return covered
 
     def _eligible(self, item, tick):
         st = self._item_state.get(item["id"])

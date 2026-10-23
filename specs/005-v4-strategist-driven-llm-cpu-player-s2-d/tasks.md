@@ -50,8 +50,8 @@
 
 **Goal**: exactly two deterministic reflexes (FR-006); base keeps breathing without S2; program always wins.
 
-- [ ] T011 [US2] Write reflex tests FIRST in `tools/tests/twincore/test_executor.py`: idle collector → order_harvest(nearest asteroid, tie-break by id); full collector → order_dock(nearest dock-capable); program-wins gate (ship named by live item ⇒ no reflex); S2-disconnected-at-boot scenario (reflexes only, trail-logged)
-- [ ] T012 [US2] Implement reflexes in `tools/twincore/executor.py` per contracts/executor-contract.md §3 (`reflex_harvest`, `reflex_deliver`; commands cite item_id=reflex_*; same validator lane)
+- [X] T011 [US2] Write reflex tests FIRST in `tools/tests/twincore/test_executor.py`: idle collector → order_harvest(nearest asteroid, tie-break by id); full collector → order_dock(nearest dock-capable); program-wins gate (ship named by live item ⇒ no reflex); S2-disconnected-at-boot scenario (reflexes only, trail-logged)
+- [X] T012 [US2] Implement reflexes in `tools/twincore/executor.py` per contracts/executor-contract.md §3 (`reflex_harvest`, `reflex_deliver`; commands cite item_id=reflex_*; same validator lane)
 
 **Checkpoint**: with S2 unreachable from boot the seat still harvests — and NOTHING else autonomously.
 

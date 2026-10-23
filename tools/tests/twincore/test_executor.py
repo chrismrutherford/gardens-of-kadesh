@@ -70,7 +70,8 @@ class TestTranslation(ExecutorBase):
         d["production"] = [{"id": "q%d" % i, "verb": "order_build",
                             "params": {"type": t}, "once": True}
                            for i, t in enumerate(types)]
-        ex = make_executor(self.E.Executor)
+        ex = make_executor(self.E.Executor,
+                           reflexes={"harvest": False, "deliver": False})
         ex.set_program(self.make_prog(**d), tick=1)
         issued = ex.on_tick(1)
         self.assertEqual(len(issued), 6)               # cap (all channels)
@@ -234,9 +235,10 @@ class TestRowsAndNoDoctrine(ExecutorBase):
         kinds = [r["kind"] for r in rows]
         self.assertIn("validation", kinds)
         self.assertIn("command", kinds)
-        cmd = [r for r in rows if r["kind"] == "command"]
-        self.assertTrue(all(r["program_version"] == 7 and r["item_id"] in
-                            ("p1", "t1") for r in cmd))
+        cmd = [r for r in rows if r["kind"] == "command"
+               and r["program_version"] == 7]
+        self.assertTrue(cmd)                  # program-cited commands exist
+        self.assertTrue(all(r["item_id"] in ("p1", "t1") for r in cmd))
         self.assertTrue(all(r.get("tick") == 5 for r in cmd))
 
     def test_executor_holds_no_doctrine(self):
