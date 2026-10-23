@@ -46,7 +46,8 @@ def v4_micro(seq=1, program_version=1, **over):
     return m
 
 
-def v4_ledger(own=0, idle_collectors=0, full_collectors=0, asteroids=1):
+def v4_ledger(own=0, idle_collectors=0, full_collectors=0, asteroids=1,
+              builders=1, bank=5000.0):
     """A tiny deterministic state-view for executor tests (refined per
     spec-003 snapshot shape in later increments)."""
     ships, rid = [], 100
@@ -65,7 +66,77 @@ def v4_ledger(own=0, idle_collectors=0, full_collectors=0, asteroids=1):
     for i in range(asteroids):
         roids.append({"id": aid + i, "pos": [float(100 * i), 0.0, 0.0],
                       "ru": 5000.0})
-    return {"own_player": own, "ships": ships, "asteroids": roids}
+    led = {"own_player": own, "ships": ships, "asteroids": roids,
+           "bank": bank}
+    led["builders"] = builders
+    return led
+
+
+class FakeLedger:
+    """Ledger-shaped wrapper over a v4_ledger dict (validator interface:
+    as_dict / in_flight / is_allied / register_command)."""
+
+    def __init__(self, led=None):
+        led = led or v4_ledger()
+        self._ships_all = {s["id"]: dict(s) for s in led.get("ships", [])}
+        if led.get("builders"):
+            self._ships_all[90] = {"id": 90, "type": "Mothership",
+                                   "owner": led.get("own_player", 0),
+                                   "pos": [0.0, 0.0, 0.0], "order": "parade"}
+        self._resources = {r["id"]: dict(r) for r in led.get("asteroids", [])}
+        self._state = {"ships_all": self._ships_all,
+                       "resources": self._resources,
+                       "bank": led.get("bank", 5000.0)}
+        self._pending = {}
+
+    def as_dict(self):
+        return dict(self._state)
+
+    def in_flight(self):
+        return dict(self._pending)
+
+    def is_allied(self, player):
+        return False
+
+    def register_command(self, command):
+        self._pending[command["id"]] = {
+            "tool": command.get("tool"),
+            "fingerprint": command.get("fingerprint"),
+            "issued_tick": command.get("issued_tick", 0),
+        }
+
+    def clear_pending(self):
+        self._pending.clear()
+
+
+class FakeClient:
+    """Client test double: records wire orders; errors are scriptable per
+    tool (one-shot queues), success returns {"queued": True, "orderId": id}."""
+
+    def __init__(self):
+        self.issued = []
+        self.error_queue = {}   # tool -> list of error payloads
+
+    def order(self, tool, params=None):
+        self.issued.append({"tool": tool, "params": dict(params or {})})
+        errs = self.error_queue.get(tool)
+        if errs:
+            return errs.pop(0)
+        return {"queued": True, "orderId": (params or {}).get("id")}
+
+    def fail_once(self, tool, error):
+        self.error_queue.setdefault(tool, []).append({"error": error})
+
+
+@pytest.fixture
+def fake_client():
+    return FakeClient()
+
+
+@pytest.fixture
+def fake_ledger():
+    return FakeLedger(v4_ledger(idle_collectors=2, full_collectors=1,
+                                asteroids=3, builders=1))
 
 
 @pytest.fixture

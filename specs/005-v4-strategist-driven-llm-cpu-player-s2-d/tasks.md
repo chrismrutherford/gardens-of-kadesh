@@ -36,8 +36,8 @@
 
 **Independent Test** (spec US1): fresh cash-inject match; within first two pulses a program applies (version bump recorded) covering production + research + ≥1 fleet tasking; trail shows every command traced to its program item.
 
-- [ ] T006 [US1] Write `tools/tests/twincore/test_executor.py` translation tests FIRST: fixed order (production then tasking, packet order), ≤6 commands/tick cap with carry-over, one-shot retires / standing re-issues, ProgramStatus (issued tick + command ids + resolution applied/blocked/rejected aux) recorded, every command cites {version, item_id}
-- [ ] T007 [US1] Implement `tools/twincore/executor.py`: `Executor.on_tick(tick, state)` per contracts/executor-contract.md §1–2; validator lane via `tools/twincore/validator.py`; no build priorities/ratios/chains (FR-004)
+- [X] T006 [US1] Write `tools/tests/twincore/test_executor.py` translation tests FIRST: fixed order (production then tasking, packet order), ≤6 commands/tick cap with carry-over, one-shot retires / standing re-issues, ProgramStatus (issued tick + command ids + resolution applied/blocked/rejected aux) recorded, every command cites {version, item_id}
+- [X] T007 [US1] Implement `tools/twincore/executor.py`: `Executor.on_tick(tick, state)` per contracts/executor-contract.md §1–2; validator lane via `tools/twincore/validator.py`; no build priorities/ratios/chains (FR-004)
 - [ ] T008 [US1] Write `tools/tests/twincore/test_v4_driver.py` pulse-loop tests FIRST: async two-phase (pulse never blocks tick loop), ≤1 program/pulse, malformed output → ≤1 bounded repair then abort (last program stands, failure recorded), whole-packet apply at tick boundary
 - [ ] T009 [US1] Implement `tools/twincore/v4driver.py`: `PulseLoop` (async two-phase carried; `llm.py` call + ≤1 repair attempt), `v4 driver assembly` (single binding = executor's client; GameClock game-time cadence; paused ⇒ no model calls), trail rows (`program`/`packet`) via recorder+queue
 - [ ] T010 [US1] Regression gate: full `python -m pytest tools/tests/twincore/ -q` green (v3 suites untouched)
