@@ -808,7 +808,7 @@ class S1MicroLoop:
             o = s.get("order")
             verb = o.get("verb") if isinstance(o, dict) else o
             war = "ResourceCollector" not in (s.get("type") or "")
-            near = (d2(pos, cx, cy, cz) <= zone[3] ** 2) if zone else \
+            near = (d2(pos, [cx, cy, cz]) <= zone[3] ** 2) if zone else \
                 (d2(pos, base) <= 22500 ** 2) if (war and base) else None
             tag = ("in-scope" if near else "out-of-scope") if near is not None \
                 and war else ""

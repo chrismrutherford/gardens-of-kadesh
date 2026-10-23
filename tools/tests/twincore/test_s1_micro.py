@@ -40,6 +40,23 @@ class FakeS1Channel:
                                       "total": 30}
 
 
+def mk_s1_loop(prog, script=None):
+    """Shared S1-loop fixture: FakeLedger env + Executor + S1MicroLoop."""
+    import twincore.executor as E
+    import twincore.v4driver as VD
+    led = CF.FakeLedger(CF.v4_ledger(idle_collectors=1, full_collectors=1,
+                                     asteroids=2, builders=1))
+    ex = E.Executor(client=CF.FakeClient(), ledger=led,
+                    recorder=MemRecorder(),
+                    reflexes={"harvest": False, "deliver": False})
+    if prog is not None:
+        ex.set_program(prog, tick=1)
+    loop = VD.S1MicroLoop(channel=FakeS1Channel(script), executor=ex,
+                          recorder=ex.recorder, ledger=led,
+                          micro_pulse_ticks=4)
+    return loop, ex
+
+
 def mk_loop(cls, prog=None, script=None, micro_pulse_ticks=4, **kw):
     led = CF.FakeLedger(CF.v4_ledger(idle_collectors=1, full_collectors=1,
                                      asteroids=2, builders=1))
@@ -67,21 +84,7 @@ class TestS1Micro(unittest.TestCase):
         self.VD = VD
 
     def loop(self, prog, script=None):
-        class Holder:
-            executor_class = None
-        import twincore.executor as E
-        led = CF.FakeLedger(CF.v4_ledger(idle_collectors=1,
-                                         full_collectors=1, asteroids=2,
-                                         builders=1))
-        ex = E.Executor(client=CF.FakeClient(), ledger=led,
-                        recorder=MemRecorder(),
-                        reflexes={"harvest": False, "deliver": False})
-        if prog is not None:
-            ex.set_program(prog, tick=1)
-        loop = self.VD.S1MicroLoop(channel=FakeS1Channel(script),
-                                   executor=ex, recorder=ex.recorder,
-                                   ledger=led, micro_pulse_ticks=4)
-        return loop, ex
+        return mk_s1_loop(prog, script)
 
     def test_tool_calls_become_cited_micro_commands(self):
         prog = P.validate_packet(copy.deepcopy(CF.v4_packet(
@@ -270,3 +273,17 @@ class TestDraftV3S1(unittest.TestCase):
         self.assertEqual(loop._history, [])
         text, meta = loop.micro_input(2)
         self.assertNotIn("# MICRO HISTORY", text)
+
+
+class TestZoneGrantMicro(unittest.TestCase):
+    """Live regression (driver crash 23:03): grants WITH zone must render
+    in-scope membership without crashing _live_view (zone branch)."""
+
+    def test_zone_grant_live_view_no_crash(self):
+        pkg = CF.v4_packet(7)
+        pkg["delegate"][0]["zone"] = [50000.0, -51000.0, 6000.0, 40000.0]
+        prog = P.validate_packet(copy.deepcopy(pkg), 0)
+        # the live crash site: micro_input with a zoned grant
+        loop = mk_s1_loop(prog, script=[[]])[0]
+        text, _ = loop.micro_input(5)
+        self.assertIn("out-of-scope", text)   # zone branch executed cleanly
