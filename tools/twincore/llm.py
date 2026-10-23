@@ -153,42 +153,105 @@ class S2Channel:
         self.max_tokens = request_max_tokens or max_output * 4
         self._client = _client(url, timeout)
 
-    def propose(self, messages):
-        """→ ({"packet": dict|None, "raw": {...}, "error": str?}, usage).
-        Connection failures degrade to an error result (no raise) so the
-        pulse loop keeps the last program (FR-012)."""
+    def propose(self, messages, tools=None):
+        """S2 (GLM-5.3) streaming propose.
+
+        - tools given → MCP-style tool-call lane (live directive
+          2026-10-23): the model rambles in reasoning_content, then issues
+          the umbrella `submit_program` (or per verb) tool call; deltas
+          accumulate; returns ({"calls": [...], ...}, usage).
+        - tools omitted → legacy freeform-content lane (kept for tests).
+        Streaming both ways: reasoning may END in the packet, then the
+        content repeats it — extraction handles either (content first).
+        """
         kwargs = {
             "model": self.model,
             "messages": list(messages),
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
-            "response_format": {"type": "json_object"},
+            "stream": True,
+            "stream_options": {"include_usage": True},
         }
-        if self.thinking is False:
-            kwargs["extra_body"] = {
-                "chat_template_kwargs": {"enable_thinking": False},
-                "thinking": {"type": "disabled"},  # GLM-style param
-            }
+        if tools:
+            kwargs["tools"] = [
+                t if t.get("type") == "function" else t for t in tools]
         try:
-            completion = self._client.chat.completions.create(**kwargs)
+            stream = self._client.chat.completions.create(**kwargs)
         except Exception as e:
-            return {"packet": None, "raw": None,
-                    "error": "strategist channel error: %s" % e}, {}
-        message = completion.choices[0].message
-        usage = _usage_of(completion.usage)
-        ex = _message_extras(message)
-        text, reasoning = ex["content"], ex["reasoning"]
+            base = {"packet": None, "calls": None, "raw": None}
+            return dict(base, error="strategist channel error: %s" % e), {}
+        content, reasoning = [], []
+        calls_acc, finish = {}, None
+        usage = {}
+        stream_err = None
+        try:
+            for chunk in stream:
+                u = getattr(chunk, "usage", None)
+                if u is not None:
+                    usage = _usage_of(u)
+                choices = getattr(chunk, "choices", None) or []
+                if not choices:
+                    continue
+                c0 = choices[0]
+                d = getattr(c0, "delta", None)
+                if d is not None:
+                    c = getattr(d, "content", None)
+                    if c:
+                        content.append(c)
+                    m = getattr(d, "model_extra", None) or {}
+                    r = m.get("reasoning_content") or m.get("reasoning")
+                    if r:
+                        reasoning.append(r)
+                    for tc in (getattr(d, "tool_calls", None) or []):
+                        idx = getattr(tc, "index", 0)
+                        slot = calls_acc.setdefault(
+                            idx, {"verb": None, "args": []})
+                        fn = getattr(tc, "function", None)
+                        if fn is not None:
+                            nm = getattr(fn, "name", None)
+                            if nm:
+                                slot["verb"] = nm
+                            a = getattr(fn, "arguments", None)
+                            if a:
+                                slot["args"].append(a)
+                f = getattr(c0, "finish_reason", None)
+                if f:
+                    finish = f
+        except Exception as e:      # mid-stream drop: FR-012, rescue below
+            stream_err = "stream interrupted: %s" % e
+        if stream_err is None and finish is None and not content \
+                and not reasoning and not usage and not calls_acc:
+            # streaming 4xx/5xx: the SDK ends the stream SILENTLY (no
+            # chunks, no raise) — classify as transport, keep FR-012 lawful
+            stream_err = "strategist channel error: empty stream (transport)"
+        text = "".join(content)
+        reas = "".join(reasoning) or None
+        calls = []
+        for _i, slot in sorted(calls_acc.items()):
+            args_s = "".join(slot["args"]) or "{}"
+            try:
+                args = json.loads(args_s)
+            except (ValueError, TypeError):
+                continue          # malformed accumulated arguments dropped
+            calls.append({"verb": slot["verb"], "params": args})
+        raw = {"content": text, "reasoning": reas,
+               "reasoning_key": "reasoning_content",
+               "finish_reason": finish or (stream_err and "error"),
+               "completion_tokens": usage.get("completion"),
+               "stream_error": stream_err, "calls": calls}
+        if stream_err:
+            return {"packet": None, "calls": None, "raw": raw,
+                    "error": stream_err}, usage
+        if tools:
+            return {"packet": None, "calls": calls or None, "raw": raw,
+                    "error": None if calls else "no tool calls issued"}, usage
         packet = _extract_json_object(text)
-        if packet is None and reasoning:
-            # GLM-thinking mode: the answer JSON sometimes surfaces only
-            # in reasoning_content (content empty / prefix-trimmed)
-            packet = _extract_json_object(reasoning)
-        raw = {"content": text, "reasoning": reasoning,
-               "reasoning_key": ex["reasoning_key"]}
+        if packet is None and reas:
+            packet = _extract_json_object(reas)   # GLM rescue paths
         if packet is not None and not isinstance(packet, dict):
             packet = None
         if packet is None:
-            return ({"packet": None, "raw": raw,
+            return ({"packet": None, "calls": None, "raw": raw,
                      "error": "unparseable JSON from strategist: %r" %
-                              ((text or reasoning or "")[:200])}, usage)
-        return {"packet": packet, "raw": raw}, usage
+                              ((text or reas or "")[:200])}, usage)
+        return {"packet": packet, "calls": calls or None, "raw": raw}, usage

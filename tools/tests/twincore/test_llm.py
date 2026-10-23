@@ -46,6 +46,30 @@ class StubLLM(http.server.BaseHTTPRequestHandler):
         req = json.loads(self.rfile.read(length) or b"{}")
         StubLLM.requests.append(req)
         status, body = StubLLM.script.pop(0) if StubLLM.script else (200, {})
+        if req.get("stream") and status == 200:
+            choices = body.get("choices") or [{}]
+            msg = choices[0].get("message", {})
+            finish = choices[0].get("finish_reason") or "stop"
+            delta = {"content": msg.get("content")}
+            for k in ("reasoning_content", "reasoning"):
+                if msg.get(k):
+                    delta[k] = msg[k]
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            def ev(obj):
+                self.wfile.write(("data: %s\n\n"
+                                  % json.dumps(obj, default=str)).encode())
+            ev({"id": "cmpl-1", "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": delta,
+                             "finish_reason": None}]})
+            ev({"id": "cmpl-1", "object": "chat.completion.chunk",
+                "choices": [{"index": 0, "delta": {},
+                             "finish_reason": finish}]})
+            ev({"id": "cmpl-1", "object": "chat.completion.chunk",
+                "choices": [], "usage": body.get("usage")})
+            self.wfile.write(b"data: [DONE]\n\n")
+            return
         payload = json.dumps(body).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -136,7 +160,12 @@ class S2Case(EndpointCase):
         got, usage = self.ch.propose(messages=[])
         self.assertEqual(got["packet"], packet)
         req = StubLLM.requests[0]
-        self.assertEqual(req["response_format"], {"type": "json_object"})
+        # live directive (2026-10-23): NEVER send response_format /
+        # thinking-disable kwargs — GLM reasons natively and the JSON
+        # grammar chokes the GLM reasoning template on this server
+        self.assertNotIn("response_format", req)
+        self.assertNotIn("extra_body", req)
+        self.assertGreater(int(req["max_tokens"]), 0)
 
     def test_unparseable_json_flagged(self):
         StubLLM.script = [(200, completions(
@@ -155,3 +184,50 @@ class S2Case(EndpointCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class S2StreamCase(EndpointCase):
+    """S2 streaming (live directive 2026-10-23): GLM rambles in
+    reasoning_content then emits the packet — deltas accumulate, the
+    rescue reads reasoning when content is empty, finish/usage surface."""
+
+    def setUp(self):
+        super().setUp()
+        from twincore import llm as L2
+        self.ch = L2.S2Channel(self.url, model="s2-stub",
+                               max_output=300, request_max_tokens=2048)
+
+    def test_reasoning_packet_rescued_with_finish_and_usage(self):
+        StubLLM.script = [(200, completions({
+            "role": "assistant", "content": "",
+            "reasoning_content": "thinking... {\"version\": 2} done",
+            "_finish": "stop"}))]
+        got, usage = self.ch.propose(messages=[{"role": "user",
+                                                "content": "go"}])
+        self.assertEqual(got["packet"], {"version": 2})
+        self.assertEqual(got["raw"]["finish_reason"], "stop")
+        self.assertEqual(usage["completion"], 80)
+        self.assertNotIn("response_format", StubLLM.requests[0])
+        self.assertTrue(StubLLM.requests[0].get("stream"))
+
+    def test_content_packet_preferred(self):
+        StubLLM.script = [(200, completions({
+            "role": "assistant",
+            "content": "{\"version\": 3, \"production\": []}",
+            "reasoning_content": "{\"version\": 1, \"production\": []}",
+            "_finish": "stop"}))]
+        got, _u = self.ch.propose(messages=[])
+        self.assertEqual(got["packet"]["version"], 3)
+
+    def test_transport_error_does_not_raise(self):
+        # the openai SDK retries 500s internally (LLM_RETRIES) — the stub
+        # must 500 on EVERY attempt, then the empty-stream classifier
+        # (or the raised error in non-stream clients) must NOT leak a raise
+        StubLLM.script = [(L.LLM_RETRIES + 1) * [
+            (500, {"error": {"message": "boom", "code": 500}})][0]]
+        StubLLM.script = list(StubLLM.script) if isinstance(
+            StubLLM.script[0], list) else StubLLM.script
+        StubLLM.script = (L.LLM_RETRIES + 1) * [
+            (500, {"error": {"message": "boom", "code": 500}})]
+        got, usage = self.ch.propose(messages=[])
+        self.assertIsNone(got["packet"])
+        self.assertIn("strategist channel error", got["error"])

@@ -440,6 +440,110 @@ class Program:
 
 
 # --------------------------------------------------------------------------
+# S2 umbrella tool (live directive 2026-10-23): the packet rides an MCP
+# tool call — `submit_program` with the packet schema as ARGUMENTS. Same
+# lane as S1's tasking tools; whole-packet validation unchanged (FR-008).
+# --------------------------------------------------------------------------
+
+SUBMIT_PROGRAM_TOOL = "submit_program"
+
+
+def submit_program_schema():
+    """OpenAI function schema for the S2 umbrella tool: arguments = the
+    Program packet (production/tasking/delegate shaped per data-model)."""
+    order_item = {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string"},
+            "verb": {"type": "string",
+                     "enum": list(PRODUCTION_VERBS + TASKING_VERBS)},
+            "params": {"type": "object"},
+            "ships": {"type": "array", "items": {"type": "integer"}},
+            "target": {"type": "integer"},
+            "pos": {"type": "array", "items": {"type": "number"}},
+            "tactics": {"type": "string",
+                        "enum": ["aggressive", "neutral", "evasive"]},
+            "once": {"type": "boolean"},
+            "priority": {"type": "integer"},
+        },
+        "required": ["id", "verb"],
+    }
+    grant_item = {
+        "type": "object",
+        "properties": {
+            "grant_id": {"type": "string"},
+            "verbs": {"type": "array", "items": {"type": "string"}},
+            "ships": {"type": ["string", "array"]},
+            "zone": {"type": "array", "items": {"type": "number"}},
+            "override_tasking": {"type": "boolean"},
+            "expires_tick": {"type": "integer"},
+        },
+        "required": ["grant_id", "verbs", "ships"],
+    }
+    return {
+        "type": "function",
+        "function": {
+            "name": SUBMIT_PROGRAM_TOOL,
+            "description":
+                "Emit the seat's WHOLE program for this pulse (all-or-"
+                "nothing at the tick boundary). Call EXACTLY once per "
+                "pulse: production, tasking, the S1 delegation envelope, "
+                "your running arc, and (optionally) S1's history window.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "version": {"type": "integer",
+                                "description": "strictly greater than "
+                                               "your previous version"},
+                    "issued_tick": {"type": "integer"},
+                    "posture": {"type": "string"},
+                    "arc": {"type": "string",
+                            "description": "REWRITE every pulse — your "
+                                           "running high-level story: "
+                                           "phase, enemy shape, tried/"
+                                           "failed, plan (<=600 chars)"},
+                    "s1_context": {
+                        "type": "object",
+                        "properties": {
+                            "max_exchanges": {"type": "integer"},
+                            "ticks": {"type": "integer"},
+                        },
+                        "required": ["max_exchanges", "ticks"],
+                        "description": "optional — S1's rolling history "
+                                       "window",
+                    },
+                    "delegate": {"type": "array",
+                                 "items": grant_item,
+                                 "description": "grants licensing S1 "
+                                                "between pulses"},
+                    "production": {"type": "array", "items": order_item,
+                                   "description": "build/research items"},
+                    "tasking": {"type": "array", "items": order_item,
+                                "description": "fleet verbs"},
+                },
+                "required": ["version", "issued_tick", "production",
+                             "tasking"],
+            },
+        },
+    }
+
+
+def packet_from_tool_call(calls):
+    """The submit_program tool call's arguments → raw packet dict (the
+    same dict validate_packet expects). Returns None when the calls do
+    not contain exactly one submit_program invocation."""
+    picks = []
+    for c in calls or []:
+        if c.get("verb") == SUBMIT_PROGRAM_TOOL:
+            params = c.get("params") or {}
+            if isinstance(params, dict):
+                picks.append(params)
+    if len(picks) != 1:
+        return None
+    return picks[0]
+
+
+# --------------------------------------------------------------------------
 # budgeted input builders (FR-009 SUPERSET / FR-013, FR-018, Draft v3)
 # --------------------------------------------------------------------------
 

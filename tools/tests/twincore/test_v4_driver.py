@@ -50,13 +50,22 @@ class FakeChannel:
         self.calls = []
         self.delay = 0.0
 
-    def propose(self, messages):
+    def propose(self, messages, tools=None):
         self.calls.append(list(messages))
         if self.delay:
             time.sleep(self.delay)
         if not self.script:
-            return {"packet": None, "error": "exhausted script"}, {}
-        return self.script.pop(0)
+            return {"packet": None, "calls": None,
+                    "error": "exhausted script"}, {}
+        out, usage = self.script.pop(0)
+        # Draft v3 tool lane: a scripted packet rides a submit_program call
+        if isinstance(out, dict) and out.get("packet") is not None:
+            return {"packet": None,
+                    "calls": [{"verb": "submit_program",
+                               "params": out["packet"]}],
+                    "raw": {}, "error": None}, usage
+        out.setdefault("calls", None)
+        return out, usage
 
 
 def valid(version=1, **over):

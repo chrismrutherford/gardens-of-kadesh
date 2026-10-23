@@ -27,8 +27,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(
 from twincore.config import seconds_to_ticks
 from twincore.llm import S1Channel, S2Channel
 from twincore.program import (ProgramError, build_micro_input,
-                              build_pulse_input, validate_micro_packet,
+                              build_pulse_input, packet_from_tool_call,
+                              submit_program_schema, validate_micro_packet,
                               validate_packet)
+import twincore.program as P
 from twincore.client import Client
 from twincore.recorder import Recorder, now_ms
 from twincore.state_store import Ledger
@@ -219,46 +221,36 @@ def research_menu_lines(view):
     return lines
 
 STATIC_CHARTER = (
-    "You are S2, the strategist of seat {seat}. Reply with ONLY one JSON "
-    "object, the program packet:\n"
-    "{\n"
-    "  \"version\": <int strictly greater than your previous packet>,\n"
-    "  \"issued_tick\": <int>,\n"
-    "  \"posture\": \"<short note for your own next pulse, optional>\",\n"
-    "  \"arc\": \"<REWRITE EVERY PULSE — your running high-level story: "
-    "match phase, enemy shape shown, what was tried/failed, current "
-    "plan; ≤600 chars>\",\n"
-    "  \"s1_context\": {\"max_exchanges\": <int 0-8>, \"ticks\": <int>},"
-    "  // optional: how much history S1 may keep\n"
-    "  \"delegate\": [ <GRANTS for S1, your fast tactical helper — or []>\n"
-    "  ],\n"
-    "  \"production\": [<order items>], \"tasking\": [<fleet items>]\n"
-    "}\n"
-    "delegate grant shape (every grant needs a grant_id exactly like "
-    "d1/d2/d3 in this form):\n"
-    "  {\"grant_id\": \"d1\", \"verbs\": [\"order_attack\", "
+    "You are S2, the strategist of seat {seat}. Think as long as you need, "
+    "then call the `submit_program` tool EXACTLY ONCE per pulse — its "
+    "arguments are the WHOLE program packet (all-or-nothing at the tick "
+    "boundary):\n"
+    "  version: <int strictly greater than your previous program>\n"
+    "  issued_tick: <int>\n"
+    "  posture: \"<short note for your own next pulse, optional>\"\n"
+    "  arc: \"<REWRITE EVERY PULSE — your running high-level story: match "
+    "phase, enemy shape shown, what was tried/failed, current plan; "
+    "≤600 chars>\"\n"
+    "  s1_context: {\"max_exchanges\": <int 0-8>, \"ticks\": <int 60-"
+    "100000>}  // optional: how much history S1 may keep\n"
+    "  delegate: [ grants for S1, your fast tactical helper — or [] ]\n"
+    "    {\"grant_id\": \"d1\", \"verbs\": [\"order_attack\", "
     "\"order_guard\"], \"ships\": \"scope:defense\", "
-    "\"override_tasking\": true}\n"
-    "  ships is either \"scope:defense\"|\"scope:fleet\" or a list of "
-    "ship ids; optional \"zone\": [cx,cy,cz,r], \"expires_tick\": <int>.\n"
-    "production items:\n"
-    "  {\"id\": \"p1\", \"verb\": \"order_build\", \"params\": "
-    "{\"type\": \"ResourceCollector\", \"quantity\": 1}}\n"
-    "  {\"id\": \"p2\", \"verb\": \"order_research\", \"params\": "
-    "{\"tech\": \"MassDrive1Kt\"}, \"once\": true}\n"
-    "tasking items (verbs: order_attack order_move order_guard "
-    "order_patrol order_formation order_halt order_tactics order_harvest "
-    "order_dock):\n"
-    "  {\"id\": \"t1\", \"verb\": \"order_attack\", \"ships\": [104, "
-    "105], \"target\": 881}\n"
-    "  {\"id\": \"t2\", \"verb\": \"order_move\", \"ships\": [104], "
-    "\"pos\": [-1200, 0, 640]}\n"
+    "\"override_tasking\": true} — ships is \"scope:defense\"|"
+    "\"scope:fleet\" or a list of ship ids; optional \"zone\": [cx,cy,cz,r]"
+    ", \"expires_tick\": <int>\n"
+    "  production: [ {\"id\": \"p1\", \"verb\": \"order_build\", "
+    "\"params\": {\"type\": \"ResourceCollector\", \"quantity\": 1}} — or "
+    "order_research {\"tech\": ...} with \"once\": true for one-shots ]\n"
+    "  tasking: [ {\"id\": \"t1\", \"verb\": \"order_attack\", "
+    "\"ships\": [104, 105], \"target\": 881} — verbs: attack move guard "
+    "patrol formation halt tactics harvest dock ]\n"
     "tech and hull names MUST come from the RESEARCH MENU / BUILD MENU "
     "sections below (an unknown name is denied with a verdict naming the "
     "legal alternatives); ship/resource ids come from the LEDGER / "
     "ENEMY CONTACTS / ASTEROID LEDGER sections (match-scoped); target "
     "0/missing ids are rejected. Whole packet or nothing: any schema "
-    "violation rejects everything and your previous packet stays in "
+    "violation rejects everything and your previous program stays in "
     "force. Executor verdicts in PROGRAM STATUS / # VERDICTS tell you "
     "what was refused and what is currently allowed — never repeat a "
     "denied item unchanged.\n")
@@ -536,13 +528,16 @@ class PulseLoop:
         raw = (out or {}).get("raw") if isinstance(out, dict) else None
         raw = raw or {}
         block = ("\n=== S2 | tick=%s pulse=%s ===\n[INPUT]\n%s\n"
-                 "[RAW content]\n%s\n[RAW reasoning]\n%s\n[PARSED]\n%s\n%s" % (
+                 "[RAW content]\n%s\n[RAW reasoning]\n%s\n"
+                 "[finish=%s ctok=%s]\n[PARSED]\n%s\n%s" % (
                      tick, self._pulse_count,
                      json.dumps(msgs, indent=1, default=str)[:60000],
                      str(raw.get("content") or "<empty>")[:60000],
                      str(raw.get("reasoning") or "<none>")[:60000],
-                     json.dumps(out.get("packet"), indent=1,
-                                default=str)[:20000],
+                     raw.get("finish_reason"), raw.get("completion_tokens"),
+                     json.dumps(P.packet_from_tool_call(out.get("calls"))
+                                or out.get("packet"),
+                                indent=1, default=str)[:20000],
                      extra or ""))
         _io_append("s2", block)
 
@@ -550,15 +545,24 @@ class PulseLoop:
         attempts = 1 + max(0, int(self.max_repairs))
         reason = None
         for attempt in range(1, attempts + 1):
-            out, usage = self.channel.propose(msgs)
+            out, usage = self.channel.propose(
+                msgs, tools=[P.submit_program_schema()])
             self._io_log_block(tick, msgs, out, "attempt=%d/%d"
                                % (attempt, attempts))
             if self.recorder:
                 self.recorder.record("usage", tick=tick, channel="s2_out",
                                      prompt=usage.get("prompt"),
                                      completion=usage.get("completion"))
-            packet = out.get("packet")
-            if packet is not None:
+            packet = P.packet_from_tool_call(out.get("calls"))
+            if out.get("error"):
+                # FR-012: a TRANSPORT failure (connection/503/empty
+                # stream) is not a model mistake — it must NOT consume
+                # the bounded repair (live lesson). Abort; the next
+                # scheduled or P0-woken pulse retries.
+                reason = out.get("error")
+                if reason and reason.startswith("strategist channel error"):
+                    break
+            elif packet is not None:
                 try:
                     program = validate_packet(packet, self.last_version)
                 except ProgramError as e:
@@ -570,8 +574,13 @@ class PulseLoop:
                                     "error": None, "tick": tick,
                                     "pulse": self._pulse_count}
                     return self._result
+            elif not (out.get("calls") or []):
+                reason = "no submit_program tool call — call submit_program " \
+                         "EXACTLY once per pulse with the whole program " \
+                         "(version, production, tasking, delegate, arc)"
             else:
-                reason = out.get("error") or "empty packet"
+                reason = "submit_program arguments were not one parseable " \
+                         "packet (malformed tool-call args JSON)"
             if attempt <= attempts - 1:
                 # bounded repair: same input, error appended verbatim
                 msgs = msgs + [
@@ -1253,7 +1262,13 @@ def driver_from_config(config, recorder=None, client=None, channel=None):
                                    DEFAULT_S2_OUT)),
             timeout=float(_cfgget(config, "channels.s2.timeout_seconds",
                                   300.0)),
-            thinking=_cfgget(config, "channels.s2.thinking", False))
+            thinking=_cfgget(config, "channels.s2.thinking", False),
+            # GLM-style models reason in reasoning_content BEFORE the JSON
+            # deliverable — the completion budget must fit the CoT + the
+            # packet (live lesson: 12k choked mid-CoT, [PARSED] null).
+            request_max_tokens=int(_cfgget(config,
+                                           "channels.s2.max_tokens", 0)
+                                   or 0) or None)
     v4 = _cfgget(config, "v4", {}) or {}
     budgets = v4.get("budgets") or {}
     pulse_ticks = seconds_to_ticks(v4.get("pulse_seconds", 120))
