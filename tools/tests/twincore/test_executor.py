@@ -583,3 +583,143 @@ class TestStandingProductionDedup(ExecutorBase):
                             "params": {"type": "LightInterceptor"}}],
             tasking=[]), 7), tick=10)
         self.assertNotIn(oid, ex.ledger.in_flight())
+
+
+class TestPolicyLane(unittest.TestCase):
+    """Draft v3.1 (user directive): S2 sets the STRATEGY (research_queue,
+    census build_policy), the executor maintains it mechanically at tick
+    rate — one research queued at a lab gate, census floors, engine-state
+    gated. S2 no longer re-issues single commands each pulse."""
+
+    def setUp(self):
+        import twincore.executor as E
+        self.E = E
+        from test_v4_driver import MemRecorder as MR
+        self._rec = MR
+
+    def _prog(self, **over):
+        pkg = {"version": 7, "production": [], "tasking": []}
+        pkg.update(over)
+        return P.validate_packet(copy.deepcopy(pkg), 0)
+
+    def _policy_env(self):
+        led = CF.FakeLedger(CF.v4_ledger(builders=1))
+        led.apply_snapshot({"techTree": {"labs": 1, "canResearch": True,
+                                         "researched": [],
+                                         "locked": []},
+                            "buildQueue": []})
+        ex = make_executor(self.E.Executor, ledger=led,
+                           client=CF.FakeClient(), recorder=self._rec())
+        return led, ex
+
+    def test_research_queue_head_of_line(self):
+        led, ex = self._policy_env()
+        ex.set_program(self._prog(research_queue=["Chassis1",
+                                                  "MassDrive10Kt"]),
+                       tick=1)
+        issued = ex.on_tick(1)
+        m = [x for x in issued if x["item_id"] == "policy:research:"
+             "Chassis1"]
+        self.assertTrue(m)         # head of line minted
+        # research accepted → researched grows → head ADVANCES
+        led.apply_snapshot({"techTree": {"labs": 1, "canResearch": True,
+                                         "researched": ["Chassis1"],
+                                         "locked": []}})
+        nxt = ex.on_tick(2)
+        self.assertTrue([x for x in nxt
+                         if x["item_id"] == "policy:research:"
+                         "MassDrive10Kt"])
+
+    def test_research_queue_waits_for_closed_lab(self):
+        led, ex = self._policy_env()
+        led.apply_snapshot({"techTree": {"labs": 1, "canResearch": False,
+                                         "researched": [],
+                                         "locked": []}})
+        ex.set_program(self._prog(research_queue=["Chassis1"]), tick=1)
+        self.assertEqual(ex.on_tick(1), [])   # lab gate closed
+        led.apply_snapshot({"techTree": {"labs": 1, "canResearch": True,
+                                         "researched": [], "locked": []}})
+        self.assertTrue(ex.on_tick(2))        # re-opens → issue
+
+    def test_build_policy_census_floor(self):
+        led, ex = self._policy_env()
+        led._ships_all[100] = {"id": 100, "type": "LightInterceptor",
+                               "owner": 0, "pos": [0.0, 0.0, 0.0],
+                               "order": "parade"}
+        ex.set_program(self._prog(
+            build_policy=[{"type": "LightInterceptor", "keep": 3},
+                          {"type": "ResourceCollector", "keep": 2}]),
+            tick=1)
+        issued = ex.on_tick(1)
+        items = [x["item_id"] for x in issued]
+        # own census: 1 LI → floor 3 → mint; 0 RC → floor 2 → mint; census
+        # met for neither gap
+        self.assertIn("policy:build:LightInterceptor", items)
+        self.assertIn("policy:build:ResourceCollector", items)
+        # census satisfied → no mints (2 LI now exist? census still 1 in
+        # fake; queue busy gate instead). The engine ACKs both oids first
+        # (orders leave in-flight; the LI stays BUSY via buildQueue).
+        for x in issued:
+            ex.on_engine_event({"type": "orderApplied",
+                                "id": x["command_id"]}, tick=2)
+        led.apply_snapshot({"buildQueue": [{"builder": 90, "hull":
+                                            "LightInterceptor"}]})
+        again = ex.on_tick(2)
+        self.assertNotIn("policy:build:LightInterceptor",
+                         [x["item_id"] for x in again])
+        self.assertIn("policy:build:ResourceCollector",
+                      [x["item_id"] for x in again])
+
+    def test_build_policy_census_met_no_mint(self):
+        led, ex = self._policy_env()
+        for i in (100, 101, 102, 103):
+            led._ships_all[i] = {"id": i, "type": "LightInterceptor",
+                                 "owner": 0, "pos": [0.0, 0.0, 0.0],
+                                 "order": "parade"}
+        ex.set_program(self._prog(
+            build_policy=[{"type": "LightInterceptor", "keep": 4}]),
+            tick=1)
+        issued = ex.on_tick(1)
+        self.assertEqual([x for x in issued if x["item_id"].startswith(
+            "policy:")], [])
+
+
+class TestDeadAsteroidForensics(unittest.TestCase):
+    """Live lesson: reflex harvests re-issued the same depleted asteroid
+    every tick (E_BAD_ID loop). The consumer drops the dead id on reject
+    and the floor skips value-poor rocks."""
+
+    def setUp(self):
+        import twincore.executor as E
+        self.E = E
+
+    def test_e_bad_id_drops_resource_from_ledger(self):
+        from test_v4_driver import MemRecorder as MR
+        led = CF.FakeLedger(CF.v4_ledger(idle_collectors=1, asteroids=2))
+        ex = make_executor(self.E.Executor, ledger=led,
+                           client=CF.FakeClient(), recorder=MR())
+        ex.set_program(P.validate_packet({"version": 7}, 0), tick=1)
+        issued = ex.on_tick(1)
+        harvest = [m for m in issued if m["item_id"] == "reflex_harvest"]
+        self.assertTrue(harvest)
+        oid = harvest[0]["command_id"]
+        dead = harvest[0]["params"]["target"]
+        ex.on_engine_event({"type": "orderRejected", "id": oid,
+                            "aux": 2}, tick=2)
+        self.assertNotIn(dead, led.as_dict()["resources"])
+        self.assertTrue(any("gone" in v["text"] for v in ex.verdicts()))
+        # the NEXT reflex picks a DIFFERENT asteroid
+        nxt = ex.on_tick(3)
+        nxt_h = [m for m in nxt if m["item_id"] == "reflex_harvest"]
+        if nxt_h:
+            self.assertNotEqual(nxt_h[0]["params"]["target"], dead)
+
+    def test_value_poor_asteroids_skipped(self):
+        led = CF.FakeLedger(CF.v4_ledger(idle_collectors=1, asteroids=1))
+        led.as_dict()["resources"][500]["value"] = 3
+        ex = make_executor(self.E.Executor, ledger=led,
+                           client=CF.FakeClient())
+        ex.set_program(P.validate_packet({"version": 7}, 0), tick=1)
+        issued = ex.on_tick(1)
+        self.assertEqual([m for m in issued
+                          if m["item_id"] == "reflex_harvest"], [])

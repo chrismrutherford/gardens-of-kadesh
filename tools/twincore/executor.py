@@ -47,6 +47,7 @@ COLLECTOR = "ResourceCollector"
 # carried observation semantics: verbs under which a collector is idle
 # economy (parade ships harvest NOTHING)
 IDLE_HARVEST_VERBS = ("idle", "moving", "parade", "order?")
+REFLEX_MIN_VALUE = 10   # dead/nearly-empty asteroids aren't fleet targets
 
 
 def _order_verb(ship):
@@ -145,6 +146,8 @@ class Executor:
         self._oid_items = {}
         # semantic-name legality (from the live techTree, FR-009 menus)
         self._legal_caches = None   # (legal_techs, legal_hulls) by view id
+        # oid → last proposal (engine-event consumer: E_BAD_ID forensics)
+        self._oid_proposals = {}
 
     # -- teaching firewall (FR-020) ---------------------------------------
     def add_verdict(self, kind, subject, text, tick=None):
@@ -308,6 +311,59 @@ class Executor:
                         % (hull, sorted(legal_hulls)[:6]))
         return None
 
+    # -- policy lane (Draft v3.1: S2 sets the strategy, code maintains it) --
+    def _policy_entries(self, tick):
+        """The program's POLICY lists, mechanically maintained:
+        - research_queue: HEAD-of-line tech not yet researched, issued
+          when the lab gate (canResearch) is open; one lab = one at a time;
+          S2 no longer re-issues research per pulse.
+        - build_policy: census floors per hull — mint one when own census
+          < keep AND the engine buildQueue shows no such hull pending.
+        Policies cite {program_version, policy item} like any item.
+        """
+        if self.program is None:
+            return []
+        out = []
+        view = self.ledger.as_dict() if self.ledger is not None else {}
+        tt = view.get("techTree") or {}
+        researched = set(tt.get("researched") or [])
+        can = tt.get("canResearch")
+        head = None
+        for t in self.program.research_queue:
+            if t not in researched:
+                head = t
+                break
+        if head is not None and can is True and not self._suppressed:
+            if ("research", head) not in self._suppressed:
+                out.append(("policy:research:%s" % head,
+                            {"verb": "order_research",
+                             "params": {"tech": head}},
+                            "program", self.program.version))
+        queue_txt = json.dumps(view.get("buildQueue") or [], default=str)
+        own_counts = {}
+        for s in (view.get("ships_all") or {}).values():
+            if s.get("owner") == self.own_player:
+                own_counts[s.get("type")] = own_counts.get(s.get("type"),
+                                                           0) + 1
+        for pol in sorted(self.program.build_policy,
+                          key=lambda p: (-p["priority"], p["type"])):
+            hull = pol["type"]
+            if own_counts.get(hull, 0) >= pol["keep"]:
+                continue
+            if hull and hull in queue_txt:
+                continue     # engine already building one — next tick
+            if ("build", hull) in self._suppressed:
+                continue
+            bid = self._discover_builder()
+            if bid is None:
+                continue
+            out.append(("policy:build:%s" % hull,
+                        {"verb": "order_build",
+                         "params": {"type": hull, "quantity": 1,
+                                    "ships": [bid]}},
+                        "program", self.program.version))
+        return out
+
     # -- program generation ---------------------------------------------
     def set_program(self, program, tick):
         """Swap in a WHOLE new program generation (FR-008; old in-flight
@@ -406,12 +462,22 @@ class Executor:
                 vtxt = "%s; allowed: ships/targets from the LEDGER / " \
                        "ENEMY CONTACTS / ASTEROID LEDGER, names from the " \
                        "BUILD/RESEARCH MENU" % res.get("reason")
+                # policy items suppress by their MEANING (research/build of
+                # this tech/hull) so the engine denial isn't retried in a
+                # tight loop this generation
+                for head in (item_id,):
+                    if head.startswith("policy:research:"):
+                        self._suppressed.add(("research",
+                                              head.split(":", 2)[2]))
+                    if head.startswith("policy:build:"):
+                        self._suppressed.add(("build",
+                                              head.split(":", 2)[2]))
                 if st is not None:
                     st["resolution"] = "blocked"
                     st["reason"] = res.get("reason")
                     st["verdict"] = vtxt
                     st["attempts"] += 1
-                    self._suppressed.add(item_id)  # 1 attempt per cycle
+                self._suppressed.add(item_id)   # 1 attempt per cycle
                 self.add_verdict("deny", item_id, vtxt, tick)
                 if self.recorder:
                     self.recorder.record(
@@ -458,6 +524,9 @@ class Executor:
                      "fingerprint": res.get("fingerprint"),
                      "issued_tick": tick})
             self._oid_items[cmd_id] = item_id   # event consumer (FR-023)
+            self._oid_proposals[cmd_id] = {
+                "verb": proposal["verb"],
+                "params": dict(proposal.get("params") or {})}
             if self.recorder:
                 self.recorder.record(
                     "validation", tick=tick, tool=proposal["verb"],
@@ -504,6 +573,24 @@ class Executor:
                 return False
             st = self._item_state.get(item_id)
             word = self.AUX_WORDS.get(aux if isinstance(aux, int) else None)
+            # E_BAD_ID forensic (live lesson: reflex harvests re-issued the
+            # same DEAD asteroid id every tick, RUs vanishing to 0/removed):
+            # retire the dead target from the ledger so the floor can pick
+            # the next-best asteroid immediately.
+            if aux == 2:
+                proposal = self._oid_proposals.get(oid) or {}
+                target = (proposal.get("params") or {}).get("target")
+                if proposal.get("verb") == "order_harvest" and target \
+                        and self.ledger is not None:
+                    self.ledger.forget_resource(target)
+                    self.add_verdict(
+                        "deny", item_id,
+                        "engine rejected harvest: asteroid %s gone "
+                        "(E_BAD_ID) — dropped from the ledger; next-best "
+                        "asteroid follows" % target, tick)
+            vtxt = "engine denied (aux=%s): %s" % (
+                aux, word or "check names in the BUILD/RESEARCH MENU "
+                "and ids in the LEDGER/ASTEROID sections")
             vtxt = "engine denied (aux=%s): %s" % (
                 aux, word or "check names in the BUILD/RESEARCH MENU "
                 "and ids in the LEDGER/ASTEROID sections")
@@ -541,20 +628,24 @@ class Executor:
     # -- mechanical translation (zero policy) ------------------------------
     def _program_entries(self, tick):
         """Program items → validator proposals, fixed order: production
-        (packet order), then tasking (packet order). [(item_id, proposal,
+        (packet order), then tasking (packet order), then the POLICY lane
+        (research queue head, census floors). [(item_id, proposal,
         "program")] (proposal None = blocked pre-validation)."""
         out = []
-        for item in self.program.production:
-            if not self._eligible(item, tick):
-                continue
-            p = self._production_proposal(item)
-            if p is not None:        # None: blocked (no builder)
-                out.append((item["id"], p, "program", self.program.version))
-        for item in self.program.tasking:
-            if not self._eligible(item, tick):
-                continue
-            out.append((item["id"], self._tasking_proposal(item), "program",
-                        self.program.version))
+        if self.program is not None:
+            for item in self.program.production:
+                if not self._eligible(item, tick):
+                    continue
+                p = self._production_proposal(item)
+                if p is not None:        # None: blocked (no builder)
+                    out.append((item["id"], p, "program",
+                                self.program.version))
+            for item in self.program.tasking:
+                if not self._eligible(item, tick):
+                    continue
+                out.append((item["id"], self._tasking_proposal(item),
+                            "program", self.program.version))
+        out += self._policy_entries(tick)
         return out
 
     # -- reflex floor (FR-006; contracts §3) ---------------------------------
@@ -564,7 +655,8 @@ class Executor:
         EVERY tick (continuous enforcement): a ship that drifted back to
         idle/parade must not stay blocked by a stale in-flight harvest oid —
         state truth wins and the stale oid is dropped. Runs ONLY for ships
-        not covered by a live program item (gap-fillers)."""
+        not covered by a live program item (gap-fillers). Dead/empty
+        asteroids (value ≤ REFLEX_MIN_VALUE) are not targets."""
         if not (self.reflexes.get("harvest") or self.reflexes.get("deliver")):
             return []
         view = self.ledger.as_dict() if self.ledger is not None else {}
@@ -577,7 +669,9 @@ class Executor:
         covered = self._covered_ships()
         covered |= self.micro_covered_ships()
         dockables = [s for s in own if s.get("type") in DOCKABLES]
-        resources = list((view.get("resources") or {}).values())
+        resources = [r for r in (view.get("resources") or {}).values()
+                     if (r.get("value", r.get("ru", 0)) or 0)
+                     > REFLEX_MIN_VALUE]
         out = []
         for s in sorted(collectors, key=lambda x: _sid_t(x, None, "id")):
             sid = s["id"]

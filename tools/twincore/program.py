@@ -39,6 +39,11 @@ MAX_DELEGATE_GRANTS = 8
 MAX_SHIPS_PER_ITEM = 64
 MAX_POSTURE_CHARS = 400
 POS_LIMIT = 100000.0
+# Draft v3.1: S2 sets STRATEGY, the executor maintains it mechanically —
+# research is a QUEUE (the executor runs it head-of-line at tick rate,
+# lab-gated), production is a POLICY (census floors maintained per hull).
+MAX_RESEARCH_QUEUE = 24
+MAX_BUILD_POLICY = 16
 # Draft v3 (FR-021/FR-022): arc is length-CLAMPED by the driver (never
 # rejected here); s1_context shape is a contract — malformed shape rejects.
 S1_CONTEXT_RANGES = {"max_exchanges": (0, 8), "ticks": (60, 100000)}
@@ -113,13 +118,65 @@ def validate_packet(raw, last_accepted_version=-1):
 
     s1_context = _validate_s1_context(raw.get("s1_context"))
 
+    research_queue = _validate_research_queue(raw.get("research_queue"))
+    build_policy = _validate_build_policy(raw.get("build_policy"))
+
     delegate = _validate_delegate(raw.get("delegate"))
     production = _validate_production(raw.get("production"))
     tasking = _validate_tasking(raw.get("tasking"))
 
     _check_id_collisions(production, tasking)
     return Program(raw, delegate=delegate, production=production,
-                   tasking=tasking)
+                   tasking=tasking, research_queue=research_queue,
+                   build_policy=build_policy)
+
+
+def _validate_research_queue(queue):
+    """Draft v3.1: ordered list of tech names — the EXECUTOR runs it
+    head-of-line (one research at the lab gate), S2 no longer has to
+    re-issue research each pulse (set the strategy, not the commands)."""
+    if queue is None:
+        return []
+    if not isinstance(queue, list) or len(queue) > MAX_RESEARCH_QUEUE:
+        _bad("research_queue must be a list of ≤ %d tech names"
+             % MAX_RESEARCH_QUEUE)
+    out = []
+    for t in queue:
+        if not isinstance(t, str) or not t:
+            _bad("research_queue entries must be non-empty tech names")
+        out.append(t)
+    return out
+
+
+def _validate_build_policy(policy):
+    """Draft v3.1: census floors — {type, keep, priority?}; the executor
+    maintains each hull's own census ≥ keep at tick rate (engine
+    buildQueue-gated)."""
+    if policy is None:
+        return []
+    if not isinstance(policy, list) or len(policy) > MAX_BUILD_POLICY:
+        _bad("build_policy must be a list of ≤ %d {type, keep} entries"
+             % MAX_BUILD_POLICY)
+    out = []
+    seen_types = set()
+    for e in policy:
+        if not isinstance(e, dict):
+            _bad("build_policy entries must be objects")
+        hull = e.get("type")
+        if not isinstance(hull, str) or not hull:
+            _bad("build_policy.type must be a non-empty hull name")
+        keep = e.get("keep")
+        if not _int(keep) or not 1 <= keep <= 40:
+            _bad("build_policy[%r].keep must be an int in [1, 40]" % hull)
+        if hull in seen_types:
+            _bad("build_policy: hull %r appears twice" % hull)
+        seen_types.add(hull)
+        priority = e.get("priority")
+        if priority is not None and not _int(priority):
+            _bad("build_policy[%r].priority must be an int" % hull)
+        out.append({"type": hull, "keep": keep, "priority": priority
+                    if priority is not None else 0})
+    return out
 
 
 def _validate_s1_context(s1_context):
@@ -393,7 +450,8 @@ def _envelope_violation(program, item, tick):
 class Program:
     """Validated Program packet (immutably wrapped)."""
 
-    def __init__(self, packet, delegate, production, tasking):
+    def __init__(self, packet, delegate, production, tasking,
+                 research_queue=None, build_policy=None):
         self._raw = packet
         self.version = packet["version"]
         self.issued_tick = packet.get("issued_tick", 0)
@@ -403,6 +461,8 @@ class Program:
         self._delegate = delegate
         self._production = production
         self._tasking = tasking
+        self._research_queue = list(research_queue or [])
+        self._build_policy = list(build_policy or [])
 
     def grant_for(self, grant_id):
         for g in self._delegate:
@@ -421,6 +481,14 @@ class Program:
     @property
     def tasking(self):
         return [dict(i) for i in self._tasking]
+
+    @property
+    def research_queue(self):
+        return list(self._research_queue)
+
+    @property
+    def build_policy(self):
+        return [dict(p) for p in self._build_policy]
 
     @property
     def raw(self):
@@ -512,12 +580,34 @@ def submit_program_schema():
                         "description": "optional — S1's rolling history "
                                        "window",
                     },
+                    "research_queue": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "PREFERRED: ordered research "
+                                       "plan — the executor runs it "
+                                       "head-of-line, one lab at a time, "
+                                       "advances on research"},
+                    "build_policy": {
+                        "type": "array",
+                        "items": {"type": "object",
+                                  "properties": {
+                                      "type": {"type": "string"},
+                                      "keep": {"type": "integer",
+                                               "minimum": 1},
+                                      "priority": {"type": "integer"},
+                                  },
+                                  "required": ["type", "keep"],
+                                  },
+                        "description": "PREFERRED: census floors — "
+                                       "executor keeps headcounts ≥ keep "
+                                       "per hull"},
                     "delegate": {"type": "array",
                                  "items": grant_item,
                                  "description": "grants licensing S1 "
                                                 "between pulses"},
                     "production": {"type": "array", "items": order_item,
-                                   "description": "build/research items"},
+                                   "description": "one-shot/explicit "
+                                                  "build/research items"},
                     "tasking": {"type": "array", "items": order_item,
                                 "description": "fleet verbs"},
                 },

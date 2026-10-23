@@ -55,8 +55,11 @@ class TestReflexes(ExecutorBase):
     def test_tie_break_by_resource_id(self):
         # both asteroids equidistant → lower id wins (determinism, IV)
         led = CF.FakeLedger(CF.v4_ledger(idle_collectors=1, asteroids=0))
-        led._resources[700] = {"id": 700, "pos": [10.0, 0.0, 0.0], "ru": 1.0}
-        led._resources[699] = {"id": 699, "pos": [10.0, 0.0, 0.0], "ru": 1.0}
+        # (REFLEX_MIN_VALUE=10 floor: values above 10 are fleet targets)
+        led._resources[700] = {"id": 700, "pos": [10.0, 0.0, 0.0],
+                               "ru": 100.0}
+        led._resources[699] = {"id": 699, "pos": [10.0, 0.0, 0.0],
+                               "ru": 100.0}
         ex = make_executor(self.E.Executor, ledger=led)
         issued = ex.on_tick(1)
         r = [m for m in issued if m["item_id"] == "reflex_harvest"]

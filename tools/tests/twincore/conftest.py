@@ -112,6 +112,9 @@ class FakeLedger:
     def mark_command_done(self, oid):
         self._pending.pop(oid, None)
 
+    def forget_resource(self, rid):
+        self._resources.pop(rid, None)
+
     def is_allied(self, player):
         return False
 

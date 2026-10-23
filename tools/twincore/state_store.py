@@ -201,6 +201,16 @@ class Ledger:
     def in_flight(self):
         return dict(self._s["pending"])
 
+    def forget_resource(self, rid):
+        """E_BAD_ID forensics (FR-023 path): an order named a resource the
+        engine no longer has (depleted/removed) — drop it from the ledger
+        so gap-filling logic picks the next-best target."""
+        self._s["resources"].pop(rid, None)
+        try:
+            self._s["resources"].pop(int(rid), None)
+        except (TypeError, ValueError):
+            pass
+
     def mark_command_done(self, oid):
         """A wire command left the pending set: either the engine ACKED it
         (orderApplied/correction event) or its effect demonstrably lapsed
